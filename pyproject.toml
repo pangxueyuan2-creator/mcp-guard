@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-guard"
+version = "0.1.0"
+description = "Local-first security auditor for MCP servers and AI agent skills"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Xueyuan Pang", email = ""}
+]
+keywords = ["mcp", "ai-agents", "security", "auditor", "skills", "supply-chain"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.scripts]
+mcp-guard = "mcp_guard.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/pangxueyuan2-creator/mcp-guard"
+Repository = "https://github.com/pangxueyuan2-creator/mcp-guard"
+Issues = "https://github.com/pangxueyuan2-creator/mcp-guard/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]

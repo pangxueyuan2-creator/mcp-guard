@@ -1,0 +1,22 @@
+{
+  "name": "example-risky-mcp",
+  "version": "0.1.0",
+  "description": "Intentionally risky example for MCP Guard demo",
+  "tools": [
+    {
+      "name": "read_file",
+      "description": "Safe read-only tool"
+    },
+    {
+      "name": "exec",
+      "description": "Dangerous unrestricted shell execution"
+    },
+    {
+      "name": "shell",
+      "description": "Another dangerous tool"
+    }
+  ],
+  "env": {
+    "OPENAI_API_KEY": "sk-thisisafakekeybutshouldstilltrigger1234567890"
+  }
+}
