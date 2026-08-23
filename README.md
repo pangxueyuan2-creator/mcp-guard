@@ -4,7 +4,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/pangxueyuan2-creator/mcp-guard/actions"><img alt="CI" src="https://img.shields.io/badge/CI-pending-yellow"></a>
+  <a href="https://github.com/pangxueyuan2-creator/mcp-guard/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/pangxueyuan2-creator/mcp-guard/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.11+-3776AB">
   <img alt="Dependencies" src="https://img.shields.io/badge/runtime_deps-0-2ea44f">
@@ -13,62 +13,101 @@
 
 **AI agents and MCP servers are powerful. They are also a new attack surface.**
 
-MCP Guard is a fast, offline, zero-dependency auditor that inspects MCP server configs, tool definitions and agent skill packages **before** you install or run them.
-
-It answers the questions developers actually care about:
-
-- Does this MCP server request dangerous tools or permissions?
-- Are there hardcoded secrets or suspicious environment variables?
-- Is the skill package trying to reach outside its declared scope?
-- Can I trust this supply-chain artifact?
+MCP Guard is a small, offline, zero-runtime-dependency auditor for inspecting MCP configs and agent-oriented project files before you trust or run them.
 
 No cloud. No telemetry. No model scoring its own safety.
 
 ## 60-second demo
 
 ```bash
-# Clone and run (no install required)
 git clone https://github.com/pangxueyuan2-creator/mcp-guard.git
 cd mcp-guard
-python -m mcp_guard scan examples/risky-mcp-server.json
+python -m pip install -e .
+mcp-guard scan examples/risky-mcp-server.json
 ```
 
-You will see a clear PASS / FAIL report with concrete findings.
+The intentionally risky example should produce a FAIL report with concrete findings.
 
 ## What it checks today
 
-| Category              | What it looks for                                      |
-|-----------------------|--------------------------------------------------------|
-| Tool permissions      | `exec`, `shell`, `file_write`, `network`, unrestricted |
-| Secrets               | API keys, tokens, private keys in configs or env       |
-| Scope violations      | Paths outside declared roots, unexpected URLs          |
-| Supply chain signals  | Unpinned versions, suspicious package sources          |
-| Policy compliance     | Against a simple local policy file                     |
+| Category | Current behavior |
+|---|---|
+| Dangerous tool declarations | Flags built-in dangerous tool names such as `exec`, `shell`, `bash`, `powershell`, and `run_command` |
+| Secret patterns | Detects several common token/private-key patterns in supported text files |
+| JSON MCP-style declarations | Inspects `tools`, `capabilities`, `functions`, and `allowed_tools` lists |
+| Recursive local scans | Scans supported JSON, TOML, YAML, Markdown, Python, JavaScript, and TypeScript files |
+| Custom local policy | `--policy` can replace the forbidden-tool list and secret regex patterns with values from TOML |
+
+MCP Guard is intentionally conservative about what it claims. Scope analysis, package-source analysis, full MCP schema validation, and richer supply-chain checks are roadmap items rather than finished features.
 
 ## Quick start
 
 ```bash
-# Structural scan only
-python -m mcp_guard scan path/to/mcp-config.json
+# Install the local checkout
+python -m pip install -e .
+
+# Structural scan
+mcp-guard scan path/to/mcp-config.json
 
 # With a custom policy
-python -m mcp_guard scan path/to/skill --policy .mcp-guard.toml
+mcp-guard scan path/to/skill --policy .mcp-guard.toml
 
 # Generate a starter policy
-python -m mcp_guard init
+mcp-guard init
+
+# Machine-readable output
+mcp-guard scan path/to/skill --json
 ```
+
+## Custom policy
+
+Generate a starter policy with:
+
+```bash
+mcp-guard init
+```
+
+Then edit `.mcp-guard.toml`. For example:
+
+```toml
+[policy]
+forbidden_tools = ["exec", "shell", "delete_everything"]
+
+[secrets]
+patterns = [
+  "sk-[a-zA-Z0-9]{20,}",
+  "CUSTOM-SECRET-[0-9]+",
+]
+```
+
+When `--policy` is provided, the configured `forbidden_tools` and `secrets.patterns` replace the corresponding built-in lists. Invalid or missing policy files are reported as failing findings instead of being silently ignored.
+
+## Development
+
+The test suite uses only the Python standard library:
+
+```bash
+python -m pip install -e .
+python -m unittest discover -s tests -v
+```
+
+CI runs the tests on Python 3.11, 3.12, and 3.13 and also smoke-tests the CLI against the risky example.
 
 ## Why this exists
 
-The current explosion of MCP servers and agent skills is exciting and dangerous at the same time. Most people install first and ask questions later. MCP Guard flips that order: inspect → decide → install.
+The explosion of MCP servers and agent skills is exciting and dangerous at the same time. Most people install first and ask questions later. MCP Guard flips that order: inspect → decide → install.
 
-It is deliberately small, readable and local-first so you can actually trust the auditor itself.
+It is deliberately small, readable and local-first so the auditor itself can be inspected without dragging in a dependency forest.
 
-## Roadmap (high level)
+## Roadmap
 
 - [x] Core scanner + CLI skeleton
-- [ ] Full MCP protocol schema validation
+- [x] Custom local policy loading
+- [x] Unit tests + CI matrix
+- [ ] Full MCP protocol/schema validation
 - [ ] Agent skill package (Claude / Cursor / Codex style) support
+- [ ] Scope and outbound-network analysis
+- [ ] Package/supply-chain source checks
 - [ ] SARIF output for CI
 - [ ] Plugin system for custom rules
 - [ ] Signed evidence reports
@@ -77,6 +116,6 @@ It is deliberately small, readable and local-first so you can actually trust the
 
 Public alpha. Single maintainer. No production claims yet.
 
-Contributions and security reports are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) (coming in next commit).
+Contributions and security reports are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 Apache-2.0.
