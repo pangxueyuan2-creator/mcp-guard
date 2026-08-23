@@ -167,7 +167,6 @@ def _scan_file(path: Path, policy: ScanPolicy) -> list[dict[str, Any]]:
         )
         return findings
 
-    # Secret scanning
     for pattern, description in policy.secret_patterns:
         if pattern.search(text):
             findings.append(
@@ -179,18 +178,16 @@ def _scan_file(path: Path, policy: ScanPolicy) -> list[dict[str, Any]]:
                 }
             )
 
-    # JSON-specific checks (MCP configs often live here)
     if path.suffix == ".json":
         try:
             data = json.loads(text)
             findings.extend(_scan_json(data, path, policy.forbidden_tools))
         except json.JSONDecodeError:
-            pass  # not every .json is a config we care about
+            pass
 
-    # Simple keyword heuristics for tool definitions
     lower = text.lower()
     for tool in policy.forbidden_tools:
-        if f'"{tool}"' in lower or f"'{tool}'" in lower or f'name\\": \\"{tool}\\"' in lower:
+        if f'"{tool}"' in lower or f"'{tool}'" in lower:
             findings.append(
                 {
                     "severity": "error",
@@ -213,7 +210,6 @@ def _scan_json(
     if not isinstance(data, dict):
         return findings
 
-    # Look for tools / capabilities lists common in MCP and agent skill formats
     for key in ("tools", "capabilities", "functions", "allowed_tools"):
         if key in data and isinstance(data[key], list):
             for item in data[key]:
