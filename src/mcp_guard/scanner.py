@@ -13,23 +13,27 @@ from urllib.parse import urlparse
 from mcp_guard.models import Finding
 from mcp_guard.policy import Policy, load_policy
 
-SENSITIVE_ENV_RE = re.compile(r"(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE[_-]?KEY|CREDENTIAL)", re.I)
-PLACEHOLDER_RE = re.compile(r"^(?:\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*|%[^%]+%|<[^>]+>|\{\{[^}]+\}\})$")
-SHELL_COMMANDS = frozenset({"bash", "sh", "zsh", "fish", "powershell", "powershell.exe", "pwsh", "cmd", "cmd.exe"})
+SENSITIVE_ENV_RE = re.compile(
+    r"(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE[_-]?KEY|CREDENTIAL)",
+    re.I,
+)
+PLACEHOLDER_RE = re.compile(
+    r"^(?:\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*|%[^%]+%|<[^>]+>|\{\{[^}]+\}\})$"
+)
+SHELL_COMMANDS = frozenset({"bash", "sh", "zsh", "fish", "powershell", "pwsh", "cmd"})
 PACKAGE_RUNNERS = frozenset({"npx", "bunx", "pnpx", "yarn", "uvx", "pipx"})
 TOOL_LIST_KEYS = frozenset({"tools", "capabilities", "functions", "allowed_tools", "allowed-tools"})
-URL_KEYS = frozenset({"url", "endpoint", "base_url", "baseurl", "server_url", "serverurl"})
+URL_KEYS = frozenset({"url", "endpoint", "base_url", "baseurl", "server_url", "serverurl", "health_url"})
 
 
 def scan_path(path: Path, policy_path: Path | None = None) -> list[dict[str, Any]]:
     """Scan a file or directory and return JSON-serializable findings.
 
-    This function keeps the original public API while the internal engine uses
-    structured :class:`Finding` objects.
+    The public return shape remains compatible with the original 0.1 API while
+    the internal engine uses structured :class:`Finding` objects.
     """
     policy = load_policy(policy_path)
-    findings = scan_findings(path, policy)
-    return [finding.to_dict() for finding in findings]
+    return [finding.to_dict() for finding in scan_findings(path, policy)]
 
 
 def scan_findings(path: Path, policy: Policy | None = None) -> list[Finding]:
@@ -51,19 +55,18 @@ def scan_findings(path: Path, policy: Policy | None = None) -> list[Finding]:
     findings: list[Finding] = []
     for candidate in candidates:
         findings.extend(_scan_file(candidate, policy))
-
     return _dedupe(findings)
 
 
 def _iter_files(root: Path, policy: Policy) -> Iterable[Path]:
     """Walk a tree without descending into ignored or symlinked directories."""
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        base = Path(dirpath)
         dirnames[:] = [
             name
             for name in dirnames
-            if name not in policy.ignored_dirs and not (Path(dirpath) / name).is_symlink()
+            if name not in policy.ignored_dirs and not (base / name).is_symlink()
         ]
-        base = Path(dirpath)
         for filename in filenames:
             path = base / filename
             if path.is_symlink():
@@ -73,8 +76,6 @@ def _iter_files(root: Path, policy: Policy) -> Iterable[Path]:
 
 
 def _scan_file(path: Path, policy: Policy) -> list[Finding]:
-    findings: list[Finding] = []
-
     try:
         size = path.stat().st_size
     except OSError as exc:
@@ -92,7 +93,10 @@ def _scan_file(path: Path, policy: Policy) -> list[Finding]:
             Finding(
                 severity="warning",
                 rule="file-too-large",
-                message=f"Skipped file larger than policy limit ({size} bytes > {policy.max_file_size_bytes} bytes)",
+                message=(
+                    "Skipped file larger than policy limit "
+                    f"({size} bytes > {policy.max_file_size_bytes} bytes)"
+                ),
                 location=str(path),
                 hint="Raise policy.max_file_size_bytes if this file should be scanned.",
             )
@@ -110,8 +114,7 @@ def _scan_file(path: Path, policy: Policy) -> list[Finding]:
             )
         ]
 
-    findings.extend(_scan_secrets(text, path, policy))
-
+    findings = _scan_secrets(text, path, policy)
     suffix = path.suffix.lower()
     if suffix == ".json":
         findings.extend(_scan_json_text(text, path, policy))
@@ -119,7 +122,6 @@ def _scan_file(path: Path, policy: Policy) -> list[Finding]:
         findings.extend(_scan_toml_text(text, path, policy))
     elif suffix in {".yaml", ".yml", ".md"}:
         findings.extend(_scan_lightweight_manifest(text, path, policy))
-
     return findings
 
 
@@ -145,7 +147,6 @@ def _scan_json_text(text: str, path: Path, policy: Policy) -> list[Finding]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
-        # Invalid JSON is only security-relevant when the file looks like an MCP config.
         if _looks_like_mcp_manifest(text, path):
             return [
                 Finding(
@@ -174,8 +175,6 @@ def _scan_structure(data: Any, path: Path, policy: Policy, *, text: str) -> list
 
     def visit(value: Any, trail: tuple[str, ...]) -> None:
         if isinstance(value, dict):
-            lowered = {str(key).lower(): item for key, item in value.items()}
-
             for key, item in value.items():
                 key_text = str(key)
                 key_lower = key_text.lower()
@@ -183,34 +182,16 @@ def _scan_structure(data: Any, path: Path, policy: Policy, *, text: str) -> list
 
                 if key_lower in TOOL_LIST_KEYS:
                     findings.extend(_check_tool_declarations(item, path, policy, text, current))
-
                 if key_lower == "command" and isinstance(item, str):
                     findings.extend(_check_command(item, value, path, text, current))
-
                 if key_lower == "env" and isinstance(item, dict):
                     findings.extend(_check_env(item, path, text, current))
-
                 if key_lower in URL_KEYS and isinstance(item, str):
                     finding = _check_url(item, path, text, current)
                     if finding:
                         findings.append(finding)
 
                 visit(item, current)
-
-            # Some manifests express a tool as {"name": "shell"} outside a list.
-            name = lowered.get("name") or lowered.get("tool") or lowered.get("id")
-            if isinstance(name, str) and name.lower() in policy.forbidden_tools:
-                findings.append(
-                    Finding(
-                        severity="error",
-                        rule="forbidden-tool",
-                        message=f"Dangerous tool declared: {name}",
-                        location=_trail_location(path, trail),
-                        line=_find_value_line(text, name),
-                        hint="Remove the tool or explicitly allow it in a reviewed policy.",
-                    )
-                )
-
         elif isinstance(value, list):
             for index, item in enumerate(value):
                 visit(item, trail + (str(index),))
@@ -260,7 +241,7 @@ def _check_command(
     trail: tuple[str, ...],
 ) -> list[Finding]:
     findings: list[Finding] = []
-    executable = Path(command).name.lower()
+    executable = _normalize_executable(command)
 
     if executable in SHELL_COMMANDS:
         findings.append(
@@ -292,7 +273,12 @@ def _check_command(
     return findings
 
 
-def _check_env(env: dict[Any, Any], path: Path, text: str, trail: tuple[str, ...]) -> list[Finding]:
+def _check_env(
+    env: dict[Any, Any],
+    path: Path,
+    text: str,
+    trail: tuple[str, ...],
+) -> list[Finding]:
     findings: list[Finding] = []
     for key, value in env.items():
         key_text = str(key)
@@ -305,7 +291,10 @@ def _check_env(env: dict[Any, Any], path: Path, text: str, trail: tuple[str, ...
             Finding(
                 severity="warning",
                 rule="inline-sensitive-env",
-                message=f"Sensitive environment variable appears to contain an inline literal: {key_text}",
+                message=(
+                    "Sensitive environment variable appears to contain an inline literal: "
+                    f"{key_text}"
+                ),
                 location=_trail_location(path, trail + (key_text,)),
                 line=_find_key_line(text, key_text),
                 hint="Reference the value from the process environment or a secret manager instead.",
@@ -314,7 +303,12 @@ def _check_env(env: dict[Any, Any], path: Path, text: str, trail: tuple[str, ...
     return findings
 
 
-def _check_url(url: str, path: Path, text: str, trail: tuple[str, ...]) -> Finding | None:
+def _check_url(
+    url: str,
+    path: Path,
+    text: str,
+    trail: tuple[str, ...],
+) -> Finding | None:
     try:
         parsed = urlparse(url)
     except ValueError:
@@ -337,9 +331,12 @@ def _check_url(url: str, path: Path, text: str, trail: tuple[str, ...]) -> Findi
 def _scan_lightweight_manifest(text: str, path: Path, policy: Policy) -> list[Finding]:
     """Conservative checks for frontmatter / simple YAML without dependencies."""
     findings: list[Finding] = []
-    lines = text.splitlines()
-    for index, line in enumerate(lines, start=1):
-        match = re.match(r"^\s*(?:allowed[_-]?tools|tools)\s*:\s*\[?([^\]#]+)\]?\s*$", line, re.I)
+    for index, line in enumerate(text.splitlines(), start=1):
+        match = re.match(
+            r"^\s*(?:allowed[_-]?tools|tools)\s*:\s*\[?([^\]#]+)\]?\s*$",
+            line,
+            re.I,
+        )
         if match:
             names = [part.strip().strip("'\"") for part in match.group(1).split(",")]
             for name in names:
@@ -356,19 +353,28 @@ def _scan_lightweight_manifest(text: str, path: Path, policy: Policy) -> list[Fi
                     )
 
         command_match = re.match(r"^\s*command\s*:\s*['\"]?([^'\"\s#]+)", line, re.I)
-        if command_match and Path(command_match.group(1)).name.lower() in SHELL_COMMANDS:
+        if command_match:
             command = command_match.group(1)
-            findings.append(
-                Finding(
-                    severity="error",
-                    rule="shell-command",
-                    message=f"Manifest launches through a general-purpose shell: {command}",
-                    location=str(path),
-                    line=index,
-                    hint="Launch a fixed executable directly.",
+            if _normalize_executable(command) in SHELL_COMMANDS:
+                findings.append(
+                    Finding(
+                        severity="error",
+                        rule="shell-command",
+                        message=f"Manifest launches through a general-purpose shell: {command}",
+                        location=str(path),
+                        line=index,
+                        hint="Launch a fixed executable directly.",
+                    )
                 )
-            )
     return findings
+
+
+def _normalize_executable(command: str) -> str:
+    name = Path(command.strip().strip('"\'')).name.lower()
+    for suffix in (".exe", ".cmd", ".bat"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
 
 
 def _first_package_arg(executable: str, args: list[Any]) -> str | None:
@@ -386,7 +392,6 @@ def _first_package_arg(executable: str, args: list[Any]) -> str | None:
                 continue
             return arg
     elif executable == "yarn":
-        # Only treat `yarn dlx package` as a runtime package fetch.
         if strings and strings[0] == "dlx":
             return next((arg for arg in strings[1:] if not arg.startswith("-")), None)
     else:
@@ -396,17 +401,17 @@ def _first_package_arg(executable: str, args: list[Any]) -> str | None:
 
 def _is_pinned_package(package: str) -> bool:
     if package.startswith(("git+", "http://", "https://")):
-        # URLs are considered pinned only when they visibly include an immutable-ish revision.
         return bool(re.search(r"(?:@|#)[0-9a-f]{7,40}(?:$|[/?#])", package, re.I))
     if package.startswith("@"):
-        # Scoped npm package: @scope/name@1.2.3
         return package.count("@") >= 2 and not package.endswith("@latest")
     return "@" in package and not package.endswith("@latest")
 
 
 def _looks_like_mcp_manifest(text: str, path: Path) -> bool:
     name = path.name.lower()
-    return "mcp" in name or any(token in text for token in ('"mcpServers"', '"mcp_servers"', '"tools"'))
+    return "mcp" in name or any(
+        token in text for token in ('"mcpServers"', '"mcp_servers"', '"tools"')
+    )
 
 
 def _line_number(text: str, offset: int) -> int:
@@ -424,9 +429,7 @@ def _find_key_line(text: str, key: str) -> int | None:
 
 
 def _trail_location(path: Path, trail: tuple[str, ...]) -> str:
-    if not trail:
-        return str(path)
-    return f"{path}:{'.'.join(trail)}"
+    return str(path) if not trail else f"{path}:{'.'.join(trail)}"
 
 
 def _dedupe(findings: Iterable[Finding]) -> list[Finding]:
