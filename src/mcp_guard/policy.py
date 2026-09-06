@@ -79,7 +79,9 @@ class Policy:
 
     @property
     def effective_forbidden_tools(self) -> set[str]:
-        return {tool.lower() for tool in self.forbidden_tools - self.allowed_tools}
+        forbidden = {tool.lower() for tool in self.forbidden_tools}
+        allowed = {tool.lower() for tool in self.allowed_tools}
+        return forbidden - allowed
 
 
 def load_policy(path: Path | None) -> Policy:
@@ -117,12 +119,18 @@ def load_policy(path: Path | None) -> Policy:
         policy.max_file_bytes = value
 
     if "allowed_hosts" in scope_section:
-        policy.allowed_hosts = {host.lower() for host in _string_set(scope_section["allowed_hosts"], "scope.allowed_hosts")}
+        policy.allowed_hosts = {
+            host.lower()
+            for host in _string_set(scope_section["allowed_hosts"], "scope.allowed_hosts")
+        }
     if "exclude_dirs" in scope_section:
         policy.excluded_dirs |= _string_set(scope_section["exclude_dirs"], "scope.exclude_dirs")
     if "extensions" in scope_section:
         extensions = _string_set(scope_section["extensions"], "scope.extensions")
-        policy.scan_extensions = {ext if ext.startswith(".") else f".{ext}" for ext in extensions}
+        policy.scan_extensions = {
+            (ext if ext.startswith(".") else f".{ext}").lower()
+            for ext in extensions
+        }
 
     custom_patterns = secrets_section.get("patterns")
     if custom_patterns is not None:
