@@ -4,79 +4,195 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/pangxueyuan2-creator/mcp-guard/actions"><img alt="CI" src="https://img.shields.io/badge/CI-pending-yellow"></a>
+  <a href="https://github.com/pangxueyuan2-creator/mcp-guard/actions"><img alt="CI" src="https://github.com/pangxueyuan2-creator/mcp-guard/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <img alt="Python" src="https://img.shields.io/badge/python-3.11+-3776AB">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="Dependencies" src="https://img.shields.io/badge/runtime_deps-0-2ea44f">
-  <img alt="Status" src="https://img.shields.io/badge/status-public_alpha-orange">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.2.0-orange">
 </p>
 
 **AI agents and MCP servers are powerful. They are also a new attack surface.**
 
-MCP Guard is a fast, offline, zero-dependency auditor that inspects MCP server configs, tool definitions and agent skill packages **before** you install or run them.
+MCP Guard is a fast, offline, zero-runtime-dependency auditor that inspects MCP server configs, tool definitions, agent skills and adjacent project files **before** you install or run them.
 
-It answers the questions developers actually care about:
+It is designed to answer practical questions:
 
-- Does this MCP server request dangerous tools or permissions?
-- Are there hardcoded secrets or suspicious environment variables?
-- Is the skill package trying to reach outside its declared scope?
-- Can I trust this supply-chain artifact?
+- Does this package declare dangerous tools such as shell or command execution?
+- Does it contain hardcoded tokens, private keys or suspicious credential fields?
+- Does it reference network hosts outside a local allow-list?
+- Does it invoke package installers without pinning a version?
+- Does it reference absolute filesystem paths that may escape a workspace?
+- Can the findings be consumed by CI or code-scanning tooling?
 
-No cloud. No telemetry. No model scoring its own safety.
-
-## 60-second demo
-
-```bash
-# Clone and run (no install required)
-git clone https://github.com/pangxueyuan2-creator/mcp-guard.git
-cd mcp-guard
-python -m mcp_guard scan examples/risky-mcp-server.json
-```
-
-You will see a clear PASS / FAIL report with concrete findings.
-
-## What it checks today
-
-| Category              | What it looks for                                      |
-|-----------------------|--------------------------------------------------------|
-| Tool permissions      | `exec`, `shell`, `file_write`, `network`, unrestricted |
-| Secrets               | API keys, tokens, private keys in configs or env       |
-| Scope violations      | Paths outside declared roots, unexpected URLs          |
-| Supply chain signals  | Unpinned versions, suspicious package sources          |
-| Policy compliance     | Against a simple local policy file                     |
+No cloud. No telemetry. No model grading its own safety. The scanner never executes the target.
 
 ## Quick start
 
 ```bash
-# Structural scan only
-python -m mcp_guard scan path/to/mcp-config.json
+git clone https://github.com/pangxueyuan2-creator/mcp-guard.git
+cd mcp-guard
+python -m pip install -e .
 
-# With a custom policy
-python -m mcp_guard scan path/to/skill --policy .mcp-guard.toml
-
-# Generate a starter policy
-python -m mcp_guard init
+mcp-guard scan examples/risky-mcp-server.json
 ```
 
-## Why this exists
+Or run from source without installing:
 
-The current explosion of MCP servers and agent skills is exciting and dangerous at the same time. Most people install first and ask questions later. MCP Guard flips that order: inspect → decide → install.
+```bash
+PYTHONPATH=src python -m mcp_guard scan examples/risky-mcp-server.json
+```
 
-It is deliberately small, readable and local-first so you can actually trust the auditor itself.
+Windows PowerShell:
 
-## Roadmap (high level)
+```powershell
+$env:PYTHONPATH = "src"
+python -m mcp_guard scan examples/risky-mcp-server.json
+```
 
-- [x] Core scanner + CLI skeleton
+## What v0.2 checks
+
+| Category | Examples |
+|---|---|
+| Dangerous tools | `exec`, `shell`, `run_command`, `bash`, `powershell`, `subprocess` |
+| Secrets | OpenAI-style keys, GitHub tokens, Slack tokens, AWS access key IDs, private keys |
+| Sensitive config | Literal values in fields such as `api_key`, `access_token`, `password`, `private_key` |
+| Network scope | URLs outside an optional `allowed_hosts` policy |
+| Supply chain | Unpinned `npx`, `npm install`, `pip install`, and `uvx` package specs |
+| Filesystem scope | Absolute Linux/Windows paths that may escape a workspace |
+| Traversal safety | Symlinks skipped; common dependency/build directories pruned |
+| Resource bounds | Configurable maximum file size |
+
+MCP Guard deliberately reports heuristics rather than claiming that every finding is exploitable. Treat findings as review signals.
+
+## Output formats
+
+Human-readable output is the default:
+
+```bash
+mcp-guard scan path/to/skill
+```
+
+JSON for automation:
+
+```bash
+mcp-guard scan path/to/skill --format json
+```
+
+SARIF 2.1.0 for CI/code-scanning integrations:
+
+```bash
+mcp-guard scan path/to/skill --format sarif --output mcp-guard.sarif
+```
+
+The older `--json` flag remains accepted as a compatibility alias for `--format json`.
+
+## Local policy
+
+Generate a starter policy:
+
+```bash
+mcp-guard init
+```
+
+Then scan with it:
+
+```bash
+mcp-guard scan path/to/skill --policy .mcp-guard.toml
+```
+
+Example:
+
+```toml
+[policy]
+# A finding above this severity fails the process.
+# warning => errors fail, warnings are allowed.
+max_severity = "warning"
+max_file_bytes = 2000000
+forbidden_tools = ["exec", "shell", "run_command", "bash", "powershell"]
+allowed_tools = []
+
+[scope]
+# When non-empty, exact hosts and their subdomains are allowed.
+allowed_hosts = ["api.example.com", "github.com"]
+exclude_dirs = ["vendor"]
+extensions = ["json", "toml", "yaml", "yml", "md", "py", "js", "ts"]
+
+[secrets]
+# Added on top of built-in secret patterns.
+patterns = ["MYCOMPANY_[A-Z0-9]{32}"]
+```
+
+Use `--strict` when warnings should also fail the command:
+
+```bash
+mcp-guard scan path/to/skill --strict
+```
+
+Exit codes:
+
+- `0`: scan completed and findings stayed within the allowed severity
+- `1`: findings exceeded the allowed severity
+- `2`: usage, missing path, or invalid policy error
+
+## CI
+
+The repository CI runs the package and unit tests on Python 3.11, 3.12 and 3.13. A minimal project workflow can simply run:
+
+```bash
+python -m pip install mcp-guard
+mcp-guard scan . --strict
+```
+
+For SARIF-producing pipelines:
+
+```bash
+mcp-guard scan . --format sarif --output mcp-guard.sarif
+```
+
+## Design principles
+
+1. **Local first** — source stays on your machine or CI runner.
+2. **No target execution** — scanning is static and does not import or run the inspected package.
+3. **Zero runtime dependencies** — Python's standard library is enough.
+4. **Readable rules** — the security engine is intentionally compact enough to audit.
+5. **Useful automation** — stable JSON plus SARIF makes results easy to integrate.
+6. **Policy over hardcoding** — teams can tune tool, scope and secret rules locally.
+
+## Current limitations
+
+MCP Guard is still an alpha security tool. It does **not** currently provide:
+
+- full MCP protocol/schema validation
+- semantic data-flow analysis
+- sandbox execution
+- package reputation/network lookups
+- cryptographic verification of downloaded artifacts
+- proof that a package is safe
+
+A clean scan means that the implemented rules did not find a problem; it is not a security guarantee.
+
+## Roadmap
+
+- [x] Core static scanner and CLI
+- [x] TOML policy loading
+- [x] JSON output
+- [x] SARIF 2.1.0 output
+- [x] CI test matrix
+- [x] Secret, network-scope, path and supply-chain heuristics
 - [ ] Full MCP protocol schema validation
-- [ ] Agent skill package (Claude / Cursor / Codex style) support
-- [ ] SARIF output for CI
-- [ ] Plugin system for custom rules
+- [ ] Claude / Cursor / Codex skill-format adapters
+- [ ] Extensible custom rule/plugin API
 - [ ] Signed evidence reports
+- [ ] Optional provenance / package-integrity checks
 
-## Status
+## Development
 
-Public alpha. Single maintainer. No production claims yet.
+```bash
+python -m pip install -e .
+python -m unittest discover -s tests -v
+python -m compileall -q src
+```
 
-Contributions and security reports are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) (coming in next commit).
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). For vulnerabilities, see [SECURITY.md](SECURITY.md).
 
 Apache-2.0.
