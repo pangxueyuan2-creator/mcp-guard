@@ -3,112 +3,332 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
+from urllib.parse import urlparse
 
-# Minimal built-in rules. Keep this file readable and dependency-free.
+from mcp_guard.policy import Policy, load_policy
 
-FORBIDDEN_TOOLS = {
-    "exec", "shell", "run_command", "bash", "powershell",
-    "system", "subprocess", "os.system",
-}
-
-SECRET_PATTERNS = [
-    (re.compile(r"sk-[a-zA-Z0-9]{20,}"), "Possible OpenAI-style API key"),
-    (re.compile(r"ghp_[a-zA-Z0-9]{30,}"), "Possible GitHub personal access token"),
-    (re.compile(r"-----BEGIN (RSA |OPENSSH )?PRIVATE KEY-----"), "Private key material"),
-    (re.compile(r"xox[baprs]-[0-9a-zA-Z-]{10,}"), "Possible Slack token"),
-]
+URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+PACKAGE_COMMAND_PATTERN = re.compile(
+    r"(?im)\b(?:npx|npm\s+(?:install|i)|pip(?:3)?\s+install|uvx)\s+([^\s\\]+)"
+)
+SENSITIVE_NAME_PATTERN = re.compile(
+    r"(?i)(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|passwd|private[_-]?key)(?:$|[_-])"
+)
+ABSOLUTE_PATH_PATTERN = re.compile(
+    r"(?i)(?:^|[\"'\s:=])((?:/[A-Za-z0-9._-]+){2,}|[A-Z]:\\(?:[^\\\r\n]+\\?)+)"
+)
 
 
 def scan_path(path: Path, policy_path: Path | None = None) -> list[dict[str, Any]]:
-    """Scan a file or directory and return a list of findings."""
+    """Scan a file or directory and return normalized findings.
+
+    The scanner is intentionally stdlib-only and does not execute the target.
+    """
+    policy = load_policy(policy_path)
     findings: list[dict[str, Any]] = []
 
     if path.is_file():
-        findings.extend(_scan_file(path))
+        findings.extend(_scan_file(path, policy))
     elif path.is_dir():
-        for p in path.rglob("*"):
-            if p.is_file() and p.suffix in {".json", ".toml", ".yaml", ".yml", ".md", ".py", ".js", ".ts"}:
-                findings.extend(_scan_file(p))
+        for candidate in _iter_scannable_files(path, policy):
+            findings.extend(_scan_file(candidate, policy))
     else:
-        findings.append({
-            "severity": "error",
-            "rule": "path-not-found",
-            "message": f"Path does not exist or is not accessible: {path}",
-            "location": str(path),
-        })
+        findings.append(
+            _finding(
+                "error",
+                "path-not-found",
+                f"Path does not exist or is not accessible: {path}",
+                path,
+            )
+        )
 
-    return findings
+    return _deduplicate(findings)
 
 
-def _scan_file(path: Path) -> list[dict[str, Any]]:
+def _iter_scannable_files(root: Path, policy: Policy) -> Iterable[Path]:
+    """Yield supported files while pruning dependency/build directories."""
+    for current_root, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = [
+            name
+            for name in dirs
+            if name not in policy.excluded_dirs
+            and not Path(current_root, name).is_symlink()
+        ]
+        for name in files:
+            candidate = Path(current_root, name)
+            if candidate.is_symlink():
+                continue
+            if candidate.suffix.lower() in policy.scan_extensions:
+                yield candidate
+
+
+def _scan_file(path: Path, policy: Policy) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
+
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return [
+            _finding(
+                "warning",
+                "stat-error",
+                f"Could not inspect file metadata: {exc}",
+                path,
+            )
+        ]
+
+    if size > policy.max_file_bytes:
+        return [
+            _finding(
+                "warning",
+                "file-too-large",
+                f"Skipped file larger than policy.max_file_bytes ({size} bytes)",
+                path,
+            )
+        ]
+
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
-    except Exception as exc:
-        findings.append({
-            "severity": "warning",
-            "rule": "read-error",
-            "message": f"Could not read file: {exc}",
-            "location": str(path),
-        })
-        return findings
+    except OSError as exc:
+        return [
+            _finding(
+                "warning",
+                "read-error",
+                f"Could not read file: {exc}",
+                path,
+            )
+        ]
 
-    # Secret scanning
-    for pattern, description in SECRET_PATTERNS:
-        if pattern.search(text):
-            findings.append({
-                "severity": "error",
-                "rule": "secret-detected",
-                "message": description,
-                "location": str(path),
-            })
+    findings.extend(_scan_secrets(text, path, policy))
+    findings.extend(_scan_tool_names(text, path, policy))
+    findings.extend(_scan_urls(text, path, policy))
+    findings.extend(_scan_supply_chain(text, path))
+    findings.extend(_scan_absolute_paths(text, path))
 
-    # JSON-specific checks (MCP configs often live here)
-    if path.suffix == ".json":
+    if path.suffix.lower() == ".json":
         try:
             data = json.loads(text)
-            findings.extend(_scan_json(data, path))
         except json.JSONDecodeError:
-            pass  # not every .json is a config we care about
-
-    # Simple keyword heuristics for tool definitions
-    lower = text.lower()
-    for tool in FORBIDDEN_TOOLS:
-        if f'"{tool}"' in lower or f"'{tool}'" in lower or f"name\": \"{tool}\"" in lower:
-            findings.append({
-                "severity": "error",
-                "rule": "forbidden-tool",
-                "message": f"Potentially dangerous tool name detected: {tool}",
-                "location": str(path),
-            })
+            data = None
+        if data is not None:
+            findings.extend(_scan_json(data, path, policy))
 
     return findings
 
 
-def _scan_json(data: Any, path: Path) -> list[dict[str, Any]]:
+def _scan_secrets(text: str, path: Path, policy: Policy) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
-
-    if not isinstance(data, dict):
-        return findings
-
-    # Look for tools / capabilities lists common in MCP and agent skill formats
-    for key in ("tools", "capabilities", "functions", "allowed_tools"):
-        if key in data and isinstance(data[key], list):
-            for item in data[key]:
-                name = None
-                if isinstance(item, str):
-                    name = item
-                elif isinstance(item, dict):
-                    name = item.get("name") or item.get("tool") or item.get("id")
-                if name and str(name).lower() in FORBIDDEN_TOOLS:
-                    findings.append({
-                        "severity": "error",
-                        "rule": "forbidden-tool",
-                        "message": f"Dangerous tool declared: {name}",
-                        "location": f"{path}:{key}",
-                    })
-
+    for pattern, description in policy.secret_patterns:
+        for match in pattern.finditer(text):
+            findings.append(
+                _finding(
+                    "error",
+                    "secret-detected",
+                    description,
+                    path,
+                    line=_line_number(text, match.start()),
+                )
+            )
     return findings
+
+
+def _scan_tool_names(text: str, path: Path, policy: Policy) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    lower = text.lower()
+    for tool in sorted(policy.effective_forbidden_tools):
+        escaped = re.escape(tool.lower())
+        pattern = re.compile(rf"[\"']{escaped}[\"']|\bname\s*[\"']?\s*:\s*[\"']{escaped}[\"']", re.IGNORECASE)
+        for match in pattern.finditer(lower):
+            findings.append(
+                _finding(
+                    "error",
+                    "forbidden-tool",
+                    f"Potentially dangerous tool name detected: {tool}",
+                    path,
+                    line=_line_number(text, match.start()),
+                )
+            )
+    return findings
+
+
+def _scan_urls(text: str, path: Path, policy: Policy) -> list[dict[str, Any]]:
+    if not policy.allowed_hosts:
+        return []
+
+    findings: list[dict[str, Any]] = []
+    for match in URL_PATTERN.finditer(text):
+        raw_url = match.group(0).rstrip(".,);]}")
+        host = (urlparse(raw_url).hostname or "").lower()
+        if host and not _host_allowed(host, policy.allowed_hosts):
+            findings.append(
+                _finding(
+                    "warning",
+                    "host-outside-policy",
+                    f"Network host is not allowed by policy: {host}",
+                    path,
+                    line=_line_number(text, match.start()),
+                )
+            )
+    return findings
+
+
+def _scan_supply_chain(text: str, path: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for match in PACKAGE_COMMAND_PATTERN.finditer(text):
+        spec = match.group(1).strip("\"',[]()")
+        if spec and _looks_unpinned(spec):
+            findings.append(
+                _finding(
+                    "warning",
+                    "unpinned-package",
+                    f"Package/install command appears unpinned: {spec}",
+                    path,
+                    line=_line_number(text, match.start()),
+                )
+            )
+    return findings
+
+
+def _scan_absolute_paths(text: str, path: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for match in ABSOLUTE_PATH_PATTERN.finditer(text):
+        candidate = match.group(1)
+        if candidate.startswith(("/usr/", "/opt/", "/etc/", "/var/", "/home/", "/root/")) or re.match(r"^[A-Z]:\\", candidate, re.IGNORECASE):
+            findings.append(
+                _finding(
+                    "warning",
+                    "absolute-path-reference",
+                    f"Absolute filesystem path may escape an intended workspace scope: {candidate}",
+                    path,
+                    line=_line_number(text, match.start(1)),
+                )
+            )
+    return findings
+
+
+def _scan_json(data: Any, path: Path, policy: Policy) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    _walk_json(data, path, policy, findings, pointer="$")
+    return findings
+
+
+def _walk_json(
+    value: Any,
+    path: Path,
+    policy: Policy,
+    findings: list[dict[str, Any]],
+    pointer: str,
+) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_pointer = f"{pointer}.{key}"
+            key_lower = str(key).lower()
+
+            if key_lower in {"tools", "capabilities", "functions", "allowed_tools"} and isinstance(child, list):
+                for item in child:
+                    name: str | None = None
+                    if isinstance(item, str):
+                        name = item
+                    elif isinstance(item, dict):
+                        candidate = item.get("name") or item.get("tool") or item.get("id")
+                        if candidate is not None:
+                            name = str(candidate)
+                    if name and name.lower() in policy.effective_forbidden_tools:
+                        findings.append(
+                            _finding(
+                                "error",
+                                "forbidden-tool",
+                                f"Dangerous tool declared: {name}",
+                                f"{path}:{child_pointer}",
+                            )
+                        )
+
+            if SENSITIVE_NAME_PATTERN.search(key_lower) and isinstance(child, str) and child.strip():
+                if not _looks_like_placeholder(child):
+                    findings.append(
+                        _finding(
+                            "warning",
+                            "sensitive-value",
+                            f"Sensitive field contains a literal value: {key}",
+                            f"{path}:{child_pointer}",
+                        )
+                    )
+
+            _walk_json(child, path, policy, findings, child_pointer)
+        return
+
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            _walk_json(child, path, policy, findings, f"{pointer}[{index}]")
+
+
+def _host_allowed(host: str, allowed_hosts: set[str]) -> bool:
+    for allowed in allowed_hosts:
+        allowed = allowed.lstrip(".")
+        if host == allowed or host.endswith(f".{allowed}"):
+            return True
+    return False
+
+
+def _looks_unpinned(spec: str) -> bool:
+    if spec.startswith((".", "/", "-", "git+", "http://", "https://")):
+        return False
+    if "==" in spec or re.search(r"(?:~=|>=|<=|!=|===)", spec):
+        return False
+    if spec.startswith("@"):
+        # Scoped npm package: @scope/name is unpinned; @scope/name@1.2.3 is pinned.
+        return spec.count("@") < 2
+    return "@" not in spec
+
+
+def _looks_like_placeholder(value: str) -> bool:
+    stripped = value.strip()
+    upper = stripped.upper()
+    return (
+        stripped.startswith(("${", "{{", "$", "<"))
+        or upper in {"REDACTED", "CHANGEME", "PLACEHOLDER", "YOUR_TOKEN", "YOUR_API_KEY"}
+    )
+
+
+def _line_number(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _finding(
+    severity: str,
+    rule: str,
+    message: str,
+    location: Path | str,
+    *,
+    line: int | None = None,
+) -> dict[str, Any]:
+    finding: dict[str, Any] = {
+        "severity": severity,
+        "rule": rule,
+        "message": message,
+        "location": str(location),
+    }
+    if line is not None:
+        finding["line"] = line
+    return finding
+
+
+def _deduplicate(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    result: list[dict[str, Any]] = []
+    for finding in findings:
+        key = (
+            finding.get("severity"),
+            finding.get("rule"),
+            finding.get("message"),
+            finding.get("location"),
+            finding.get("line"),
+        )
+        if key not in seen:
+            seen.add(key)
+            result.append(finding)
+    return result
