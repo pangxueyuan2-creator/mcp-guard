@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, upgrade/v0.2-security-engine]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -18,10 +18,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # actions/checkout v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        # actions/setup-python v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -43,7 +45,8 @@ jobs:
 
       - name: Upload SARIF smoke-test artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
         with:
           name: mcp-guard-sarif-py${{ matrix.python-version }}
           path: mcp-guard.sarif
