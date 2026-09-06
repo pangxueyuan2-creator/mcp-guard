@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
 authors = [
-    {name = "Xueyuan Pang", email = ""}
+    {name = "Xueyuan Pang"}
 ]
 keywords = ["mcp", "ai-agents", "security", "auditor", "skills", "supply-chain", "sarif"]
 classifiers = [
