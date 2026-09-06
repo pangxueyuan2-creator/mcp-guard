@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from mcp_guard import __version__
+from mcp_guard.policy import load_policy
+from mcp_guard.reporting import build_json_report, build_sarif_report, should_fail
 from mcp_guard.scanner import scan_path
 
 
@@ -23,8 +25,15 @@ def main(argv: list[str] | None = None) -> int:
 
     scan_p = sub.add_parser("scan", help="Scan an MCP config, skill package or directory")
     scan_p.add_argument("path", type=Path, help="File or directory to scan")
-    scan_p.add_argument("--policy", type=Path, default=None, help="Optional policy file")
-    scan_p.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+    scan_p.add_argument("--policy", type=Path, default=None, help="Optional TOML policy file")
+    scan_p.add_argument(
+        "--format",
+        choices=("human", "json", "sarif"),
+        default="human",
+        help="Report format (default: human)",
+    )
+    scan_p.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    scan_p.add_argument("--output", type=Path, default=None, help="Write report to a file")
     scan_p.add_argument("--strict", action="store_true", help="Treat warnings as failures")
 
     init_p = sub.add_parser("init", help="Write a starter policy file")
@@ -46,23 +55,37 @@ def _cmd_init(args: argparse.Namespace) -> int:
         print(f"{target} already exists. Use --force to overwrite.", file=sys.stderr)
         return 1
 
-    content = '''# MCP Guard policy (starter)
-# Edit this file to match your risk tolerance.
+    content = '''# MCP Guard policy
+# Runtime remains stdlib-only; this file uses Python's built-in TOML parser.
 
 [policy]
-# Fail the scan if any of these tool names appear
-forbidden_tools = ["exec", "shell", "run_command", "bash", "powershell"]
-
-# Maximum severity that is still allowed (info | warning | error)
+# A finding above this severity fails the scan: info | warning | error
+# warning means errors fail, while warnings are allowed.
 max_severity = "warning"
+max_file_bytes = 2000000
+
+# Tool names that are denied unless explicitly placed in allowed_tools.
+forbidden_tools = [
+    "exec",
+    "shell",
+    "run_command",
+    "bash",
+    "powershell",
+    "system",
+    "subprocess",
+    "os.system",
+]
+allowed_tools = []
+
+[scope]
+# Leave empty to permit any network host. When populated, subdomains are allowed.
+allowed_hosts = []
+exclude_dirs = ["vendor"]
+extensions = ["json", "toml", "yaml", "yml", "md", "py", "js", "ts", "mjs", "cjs", "sh", "ps1"]
 
 [secrets]
-# Patterns that should never appear in plain text
-patterns = [
-    "sk-[a-zA-Z0-9]{20,}",
-    "ghp_[a-zA-Z0-9]{30,}",
-    "-----BEGIN (RSA |OPENSSH )?PRIVATE KEY-----",
-]
+# Additional regular expressions. Built-in secret rules remain enabled.
+patterns = []
 '''
     target.write_text(content, encoding="utf-8")
     print(f"Wrote starter policy → {target}")
@@ -75,39 +98,60 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         print(f"Path not found: {path}", file=sys.stderr)
         return 2
 
-    findings = scan_path(path, policy_path=args.policy)
+    try:
+        policy = load_policy(args.policy)
+        findings = scan_path(path, policy_path=args.policy)
+    except ValueError as exc:
+        print(f"Policy error: {exc}", file=sys.stderr)
+        return 2
 
-    if args.json:
-        print(json.dumps({"findings": findings, "path": str(path)}, indent=2))
+    report_format = "json" if args.json else args.format
+
+    if report_format == "json":
+        rendered = json.dumps(build_json_report(path, findings), indent=2)
+    elif report_format == "sarif":
+        rendered = json.dumps(build_sarif_report(findings), indent=2)
     else:
-        _print_human(findings, path)
+        rendered = _render_human(findings, path)
 
-    has_error = any(f.get("severity") == "error" for f in findings)
-    has_warning = any(f.get("severity") == "warning" for f in findings)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered + ("\n" if not rendered.endswith("\n") else ""), encoding="utf-8")
+        print(f"Wrote {report_format} report → {args.output}")
+    else:
+        print(rendered)
 
-    if has_error or (args.strict and has_warning):
-        return 1
-    return 0
+    max_allowed = "info" if args.strict else policy.max_severity
+    return 1 if should_fail(findings, max_allowed) else 0
 
 
-def _print_human(findings: list[dict[str, Any]], path: Path) -> None:
+def _render_human(findings: list[dict[str, Any]], path: Path) -> str:
     if not findings:
-        print(f"PASS  {path}")
-        print("  No issues found.")
-        return
+        return f"PASS  {path}\n  No issues found."
 
     errors = [f for f in findings if f.get("severity") == "error"]
     warnings = [f for f in findings if f.get("severity") == "warning"]
-    infos = [f for f in findings if f.get("severity") == "info"]
 
     status = "FAIL" if errors else "WARN" if warnings else "PASS"
-    print(f"{status}  {path}")
-    print()
+    lines = [f"{status}  {path}", ""]
 
-    for f in findings:
-        sev = f.get("severity", "info").upper()
-        print(f"  [{sev}] {f.get('rule', 'unknown')}")
-        print(f"         {f.get('message', '')}")
-        if f.get("location"):
-            print(f"         at {f['location']}")
-        print()
+    for finding in findings:
+        severity = str(finding.get("severity", "info")).upper()
+        lines.append(f"  [{severity}] {finding.get('rule', 'unknown')}")
+        lines.append(f"         {finding.get('message', '')}")
+        if finding.get("location"):
+            location = str(finding["location"])
+            if finding.get("line"):
+                location = f"{location}:{finding['line']}"
+            lines.append(f"         at {location}")
+        lines.append("")
+
+    lines.append(
+        f"Summary: {len(errors)} error(s), {len(warnings)} warning(s), "
+        f"{len(findings) - len(errors) - len(warnings)} info finding(s)"
+    )
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
