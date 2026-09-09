@@ -13,7 +13,8 @@ from mcp_guard.policy import Policy, load_policy
 
 URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 PACKAGE_COMMAND_PATTERN = re.compile(
-    r"(?im)\b(?:npx|npm\s+(?:install|i)|pip(?:3)?\s+install|uvx)\s+([^\s\\]+)"
+    r"(?im)\b(?:npx(?:\s+(?:-y|--yes))?|npm\s+(?:install|i)|"
+    r"pip(?:3)?\s+install|uvx)\s+([^\s\\]+)"
 )
 SENSITIVE_NAME_PATTERN = re.compile(
     r"(?i)(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|passwd|private[_-]?key)(?:$|[_-])"
