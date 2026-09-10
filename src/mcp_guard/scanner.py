@@ -21,7 +21,9 @@ NPM_EXACT_VERSION_PATTERN = re.compile(
     r"^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
 SENSITIVE_NAME_PATTERN = re.compile(
-    r"(?i)(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|passwd|private[_-]?key)(?:$|[_-])"
+    r"(?i)(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|"
+    r"bearer[_-]?token|client[_-]?secret|refresh[_-]?token|session[_-]?token|"
+    r"secret|password|passwd|private[_-]?key|credentials?)(?:$|[_-])"
 )
 ABSOLUTE_PATH_PATTERN = re.compile(
     r"(?i)(?:^|[\"'\s:=])((?:/[A-Za-z0-9._-]+){2,}|[A-Z]:\\(?:[^\\\r\n]+\\?)+)"

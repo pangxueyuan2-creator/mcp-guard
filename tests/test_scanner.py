@@ -67,10 +67,49 @@ class ScannerTests(unittest.TestCase):
 
         self.assertTrue(any(f["rule"] == "sensitive-value" for f in findings))
 
+    def test_common_oauth_credential_fields_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "config.json"
+            target.write_text(
+                '{"clientSecret":"literal-client-secret",'
+                '"refresh_token":"literal-refresh-token",'
+                '"bearer-token":"literal-bearer-token",'
+                '"sessionToken":"literal-session-token",'
+                '"credentials":"literal-credentials"}',
+                encoding="utf-8",
+            )
+            findings = scan_path(target)
+
+        sensitive_messages = {
+            str(finding["message"])
+            for finding in findings
+            if finding["rule"] == "sensitive-value"
+        }
+        for key in (
+            "clientSecret",
+            "refresh_token",
+            "bearer-token",
+            "sessionToken",
+            "credentials",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(any(key in message for message in sensitive_messages))
+
     def test_placeholder_sensitive_field_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "config.json"
             target.write_text('{"api_key":"${API_KEY}"}', encoding="utf-8")
+            findings = scan_path(target)
+
+        self.assertFalse(any(f["rule"] == "sensitive-value" for f in findings))
+
+    def test_oauth_placeholder_fields_are_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "config.json"
+            target.write_text(
+                '{"clientSecret":"${CLIENT_SECRET}","refreshToken":"<REFRESH_TOKEN>"}',
+                encoding="utf-8",
+            )
             findings = scan_path(target)
 
         self.assertFalse(any(f["rule"] == "sensitive-value" for f in findings))
