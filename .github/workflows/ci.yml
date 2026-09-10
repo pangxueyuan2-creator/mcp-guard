@@ -51,3 +51,35 @@ jobs:
           name: mcp-guard-sarif-py${{ matrix.python-version }}
           path: mcp-guard.sarif
           if-no-files-found: ignore
+
+  package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        # actions/checkout v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Set up Python
+        # actions/setup-python v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install packaging tools
+        run: python -m pip install build twine
+
+      - name: Build wheel and source distribution
+        run: python -m build
+
+      - name: Validate distribution metadata
+        run: python -m twine check dist/*
+
+      - name: Install built wheel
+        run: python -m pip install --force-reinstall dist/*.whl
+
+      - name: Smoke test packaged CLI
+        run: |
+          mcp-guard --version
+          mcp-guard --help
