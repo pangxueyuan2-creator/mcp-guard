@@ -16,6 +16,7 @@ PACKAGE_COMMAND_PATTERN = re.compile(
     r"(?im)\b(?:npx(?:\s+(?:-y|--yes))?|npm\s+(?:install|i)|"
     r"pip(?:3)?\s+install|uvx)\s+([^\s\\]+)"
 )
+UVX_FROM_PATTERN = re.compile(r"(?im)\buvx\s+--from(?:=|\s+)([^\s\\]+)")
 NPM_EXACT_VERSION_PATTERN = re.compile(
     r"^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
@@ -182,18 +183,19 @@ def _scan_urls(text: str, path: Path, policy: Policy) -> list[dict[str, Any]]:
 
 def _scan_supply_chain(text: str, path: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
-    for match in PACKAGE_COMMAND_PATTERN.finditer(text):
-        spec = match.group(1).strip("\"',[]()")
-        if spec and _looks_unpinned(spec):
-            findings.append(
-                _finding(
-                    "warning",
-                    "unpinned-package",
-                    f"Package/install command appears unpinned: {spec}",
-                    path,
-                    line=_line_number(text, match.start()),
+    for pattern in (PACKAGE_COMMAND_PATTERN, UVX_FROM_PATTERN):
+        for match in pattern.finditer(text):
+            spec = match.group(1).strip("\"',[]()")
+            if spec and _looks_unpinned(spec):
+                findings.append(
+                    _finding(
+                        "warning",
+                        "unpinned-package",
+                        f"Package/install command appears unpinned: {spec}",
+                        path,
+                        line=_line_number(text, match.start()),
+                    )
                 )
-            )
     return findings
 
 
@@ -281,7 +283,7 @@ def _host_allowed(host: str, allowed_hosts: set[str]) -> bool:
 def _looks_unpinned(spec: str) -> bool:
     if spec.startswith((".", "/", "-", "git+", "http://", "https://")):
         return False
-    if "==" in spec or re.search(r"(?:~=|>=|<=|!=|===)", spec):
+    if "==" in spec:
         return False
 
     if spec.startswith("@"):
