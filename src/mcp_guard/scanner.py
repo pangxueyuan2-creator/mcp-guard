@@ -16,6 +16,9 @@ PACKAGE_COMMAND_PATTERN = re.compile(
     r"(?im)\b(?:npx(?:\s+(?:-y|--yes))?|npm\s+(?:install|i)|"
     r"pip(?:3)?\s+install|uvx)\s+([^\s\\]+)"
 )
+NPM_EXACT_VERSION_PATTERN = re.compile(
+    r"^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+)
 SENSITIVE_NAME_PATTERN = re.compile(
     r"(?i)(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|passwd|private[_-]?key)(?:$|[_-])"
 )
@@ -280,10 +283,20 @@ def _looks_unpinned(spec: str) -> bool:
         return False
     if "==" in spec or re.search(r"(?:~=|>=|<=|!=|===)", spec):
         return False
+
     if spec.startswith("@"):
-        # Scoped npm package: @scope/name is unpinned; @scope/name@1.2.3 is pinned.
-        return spec.count("@") < 2
-    return "@" not in spec
+        # Scoped npm package: the first @ begins the scope; the last one begins
+        # the version only when another @ is present.
+        if spec.count("@") < 2:
+            return True
+        version = spec.rsplit("@", 1)[1]
+        return NPM_EXACT_VERSION_PATTERN.fullmatch(version) is None
+
+    if "@" in spec:
+        version = spec.rsplit("@", 1)[1]
+        return NPM_EXACT_VERSION_PATTERN.fullmatch(version) is None
+
+    return True
 
 
 def _looks_like_placeholder(value: str) -> bool:
