@@ -38,6 +38,7 @@ class SupplyChainScannerTests(unittest.TestCase):
             "npx some-package@next",
             "npm install some-package@^1.2.3",
             "npm i some-package@~1.2.3",
+            "npm install some-package@>=1.2.3",
             "npx some-package@1.2",
             "npx @scope/tool@latest",
             "npm install @scope/tool@^2.0.0",
@@ -46,6 +47,47 @@ class SupplyChainScannerTests(unittest.TestCase):
                 findings = self._scan(command)
                 warnings = [f for f in findings if f["rule"] == "unpinned-package"]
                 self.assertEqual(len(warnings), 1)
+
+    def test_pip_floating_versions_are_reported(self) -> None:
+        for command in (
+            "pip install some-package>=1.2.3",
+            "pip3 install some-package~=1.2",
+            "pip install some-package<=2.0.0",
+            "pip install some-package!=1.5.0",
+        ):
+            with self.subTest(command=command):
+                findings = self._scan(command)
+                warnings = [f for f in findings if f["rule"] == "unpinned-package"]
+                self.assertEqual(len(warnings), 1)
+
+    def test_pip_exact_versions_stay_clean(self) -> None:
+        for command in (
+            "pip install some-package==1.2.3",
+            "pip3 install some-package===1.2.3",
+        ):
+            with self.subTest(command=command):
+                findings = self._scan(command)
+                self.assertFalse(any(f["rule"] == "unpinned-package" for f in findings))
+
+    def test_uvx_from_flag_scans_source_package(self) -> None:
+        for command in (
+            "uvx --from some-package tool",
+            "uvx --from=some-package@latest tool",
+        ):
+            with self.subTest(command=command):
+                findings = self._scan(command)
+                warnings = [f for f in findings if f["rule"] == "unpinned-package"]
+                self.assertEqual(len(warnings), 1)
+                self.assertIn("some-package", str(warnings[0]["message"]))
+
+    def test_uvx_from_flag_accepts_exact_pin(self) -> None:
+        for command in (
+            "uvx --from some-package@1.2.3 tool",
+            "uvx --from=@scope/tool@2.0.0 command",
+        ):
+            with self.subTest(command=command):
+                findings = self._scan(command)
+                self.assertFalse(any(f["rule"] == "unpinned-package" for f in findings))
 
 
 if __name__ == "__main__":
