@@ -17,6 +17,10 @@ PACKAGE_COMMAND_PATTERN = re.compile(
     r"pip(?:3)?\s+install|uvx)\s+([^\s\\]+)"
 )
 UVX_FROM_PATTERN = re.compile(r"(?im)\buvx\s+--from(?:=|\s+)([^\s\\]+)")
+NPX_COMMAND_PATTERN = re.compile(r"(?im)\bnpx\b[^\r\n]*")
+NPX_PACKAGE_FLAG_PATTERN = re.compile(
+    r"(?i)(?:--package|-p)(?:=|\s+)([^\s\\]+)"
+)
 NPM_EXACT_VERSION_PATTERN = re.compile(
     r"^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
@@ -196,6 +200,26 @@ def _scan_supply_chain(text: str, path: Path) -> list[dict[str, Any]]:
                         f"Package/install command appears unpinned: {spec}",
                         path,
                         line=_line_number(text, match.start()),
+                    )
+                )
+
+    # npx can fetch extra packages through --package/-p before invoking a binary.
+    # Those package specs are supply-chain inputs too and must be pinned just like
+    # the direct package argument handled above.
+    for command_match in NPX_COMMAND_PATTERN.finditer(text):
+        command = command_match.group(0)
+        for package_match in NPX_PACKAGE_FLAG_PATTERN.finditer(command):
+            spec = package_match.group(1).strip("\"',[]()")
+            if spec and _looks_unpinned(spec):
+                findings.append(
+                    _finding(
+                        "warning",
+                        "unpinned-package",
+                        f"Package/install command appears unpinned: {spec}",
+                        path,
+                        line=_line_number(
+                            text, command_match.start() + package_match.start()
+                        ),
                     )
                 )
     return findings
