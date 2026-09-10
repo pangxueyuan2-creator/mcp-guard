@@ -32,6 +32,43 @@ class SupplyChainScannerTests(unittest.TestCase):
                 findings = self._scan(command)
                 self.assertFalse(any(f["rule"] == "unpinned-package" for f in findings))
 
+    def test_npx_package_flags_report_unpinned_packages(self) -> None:
+        for command in (
+            "npx --package some-package tool",
+            "npx --package=some-package@latest tool",
+            "npx -p @scope/tool command",
+            "npx -p=@scope/tool@^2.0.0 command",
+        ):
+            with self.subTest(command=command):
+                findings = self._scan(command)
+                warnings = [f for f in findings if f["rule"] == "unpinned-package"]
+                self.assertEqual(len(warnings), 1)
+
+    def test_npx_package_flags_accept_exact_pins(self) -> None:
+        for command in (
+            "npx --package some-package@1.2.3 tool",
+            "npx --package=@scope/tool@2.0.0 command",
+            "npx -p some-package@1.2.3-beta.1+build.7 tool",
+            "npx -p=@scope/tool@2.0.0 command",
+        ):
+            with self.subTest(command=command):
+                findings = self._scan(command)
+                self.assertFalse(any(f["rule"] == "unpinned-package" for f in findings))
+
+    def test_npx_multiple_package_flags_are_all_scanned(self) -> None:
+        findings = self._scan(
+            "npx --package first-package@latest -p second-package@^2.0.0 tool"
+        )
+        warnings = [f for f in findings if f["rule"] == "unpinned-package"]
+        self.assertEqual(len(warnings), 2)
+        messages = {str(f["message"]) for f in warnings}
+        self.assertTrue(any("first-package@latest" in message for message in messages))
+        self.assertTrue(any("second-package@^2.0.0" in message for message in messages))
+
+    def test_package_flag_without_npx_is_not_treated_as_npx_dependency(self) -> None:
+        findings = self._scan("python tool.py --package some-package")
+        self.assertFalse(any(f["rule"] == "unpinned-package" for f in findings))
+
     def test_npm_floating_versions_are_reported(self) -> None:
         for command in (
             "npx some-package@latest",
