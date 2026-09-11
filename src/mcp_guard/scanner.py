@@ -61,6 +61,7 @@ NPX_PACKAGE_FLAG_PATTERN = re.compile(
 NPM_EXACT_VERSION_PATTERN = re.compile(
     r"^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
+GIT_COMMIT_SHA_PATTERN = re.compile(r"^(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{64})$")
 SENSITIVE_NAME_PATTERN = re.compile(
     r"(?i)(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|"
     r"bearer[_-]?token|client[_-]?secret|refresh[_-]?token|session[_-]?token|"
@@ -387,7 +388,9 @@ def _host_allowed(host: str, allowed_hosts: set[str]) -> bool:
 
 
 def _looks_unpinned(spec: str) -> bool:
-    if spec.startswith((".", "/", "-", "git+", "http://", "https://")):
+    if spec.startswith("git+"):
+        return _git_vcs_ref_is_unpinned(spec)
+    if spec.startswith((".", "/", "-", "http://", "https://")):
         return False
     if "===" in spec:
         return False
@@ -408,6 +411,25 @@ def _looks_unpinned(spec: str) -> bool:
         return NPM_EXACT_VERSION_PATTERN.fullmatch(version) is None
 
     return True
+
+
+def _git_vcs_ref_is_unpinned(spec: str) -> bool:
+    """Return whether a pip-style git+ URL lacks an immutable full commit ref."""
+    target = spec.split("#", 1)[0]
+    scheme_end = target.find("://")
+    if scheme_end < 0:
+        return True
+
+    path_start = target.find("/", scheme_end + 3)
+    if path_start < 0:
+        return True
+
+    ref_separator = target.rfind("@")
+    if ref_separator <= path_start:
+        return True
+
+    ref = target[ref_separator + 1 :]
+    return GIT_COMMIT_SHA_PATTERN.fullmatch(ref) is None
 
 
 def _looks_like_placeholder(value: str) -> bool:
