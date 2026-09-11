@@ -309,8 +309,11 @@ def _host_allowed(host: str, allowed_hosts: set[str]) -> bool:
 def _looks_unpinned(spec: str) -> bool:
     if spec.startswith((".", "/", "-", "git+", "http://", "https://")):
         return False
-    if "==" in spec:
+    if "===" in spec:
         return False
+    if "==" in spec:
+        version = spec.split("==", 1)[1]
+        return not version or "*" in version
 
     if spec.startswith("@"):
         # Scoped npm package: the first @ begins the scope; the last one begins

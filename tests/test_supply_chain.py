@@ -97,6 +97,16 @@ class SupplyChainScannerTests(unittest.TestCase):
                 warnings = [f for f in findings if f["rule"] == "unpinned-package"]
                 self.assertEqual(len(warnings), 1)
 
+    def test_pip_wildcard_equality_is_reported(self) -> None:
+        for command in (
+            "pip install some-package==1.2.*",
+            "pip3 install some-package==*",
+        ):
+            with self.subTest(command=command):
+                findings = self._scan(command)
+                warnings = [f for f in findings if f["rule"] == "unpinned-package"]
+                self.assertEqual(len(warnings), 1)
+
     def test_pip_exact_versions_stay_clean(self) -> None:
         for command in (
             "pip install some-package==1.2.3",
