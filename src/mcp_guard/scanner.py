@@ -16,6 +16,10 @@ PACKAGE_COMMAND_PATTERN = re.compile(
     r"(?im)\b(?:npx(?:\s+(?:-y|--yes))?|npm\s+(?:install|i)|"
     r"pip(?:3)?\s+install|uvx)\s+([^\s\\]+)"
 )
+INSTALL_COMMAND_PATTERN = re.compile(
+    r"(?im)\b(?:npm\s+(?:install|i)|pip(?:3)?\s+install)\s+([^\r\n;&|]+)"
+)
+EXPLICIT_PACKAGE_SPEC_PATTERN = re.compile(r"(?:@|===?|~=|!=|<=|>=|<|>)")
 UVX_FROM_PATTERN = re.compile(r"(?im)\buvx\s+--from(?:=|\s+)([^\s\\]+)")
 NPX_COMMAND_PATTERN = re.compile(r"(?im)\bnpx\b[^\r\n]*")
 NPX_PACKAGE_FLAG_PATTERN = re.compile(
@@ -200,6 +204,30 @@ def _scan_supply_chain(text: str, path: Path) -> list[dict[str, Any]]:
                         f"Package/install command appears unpinned: {spec}",
                         path,
                         line=_line_number(text, match.start()),
+                    )
+                )
+
+    # npm/pip install can accept several package specs in one command. The
+    # generic matcher above only sees the first argument, so inspect later
+    # arguments when they are explicitly package-shaped (for example @latest
+    # or >=2.0). Requiring version/package syntax avoids treating prose after an
+    # inline README command as additional packages.
+    for command_match in INSTALL_COMMAND_PATTERN.finditer(text):
+        arguments = command_match.group(1).split()
+        for raw_spec in arguments[1:]:
+            spec = raw_spec.strip("\"',[]()")
+            if not spec or spec.startswith(("-", "#", ">", "<")):
+                break
+            if not EXPLICIT_PACKAGE_SPEC_PATTERN.search(spec):
+                break
+            if _looks_unpinned(spec):
+                findings.append(
+                    _finding(
+                        "warning",
+                        "unpinned-package",
+                        f"Package/install command appears unpinned: {spec}",
+                        path,
+                        line=_line_number(text, command_match.start()),
                     )
                 )
 

@@ -116,6 +116,35 @@ class SupplyChainScannerTests(unittest.TestCase):
                 findings = self._scan(command)
                 self.assertFalse(any(f["rule"] == "unpinned-package" for f in findings))
 
+    def test_later_pip_package_specs_are_scanned(self) -> None:
+        findings = self._scan(
+            "pip install stable-package==1.2.3 floating-package>=2.0"
+        )
+        warnings = [f for f in findings if f["rule"] == "unpinned-package"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("floating-package>=2.0", str(warnings[0]["message"]))
+
+    def test_later_npm_package_specs_are_scanned(self) -> None:
+        findings = self._scan(
+            "npm install stable-package@1.2.3 floating-package@latest"
+        )
+        warnings = [f for f in findings if f["rule"] == "unpinned-package"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("floating-package@latest", str(warnings[0]["message"]))
+
+    def test_later_exact_package_specs_stay_clean(self) -> None:
+        for command in (
+            "pip install first-package==1.2.3 second-package==2.0.0",
+            "npm install first-package@1.2.3 second-package@2.0.0",
+        ):
+            with self.subTest(command=command):
+                findings = self._scan(command)
+                self.assertFalse(any(f["rule"] == "unpinned-package" for f in findings))
+
+    def test_inline_prose_after_install_command_is_not_treated_as_package(self) -> None:
+        findings = self._scan("Run pip install stable-package==1.2.3 to install it.")
+        self.assertFalse(any(f["rule"] == "unpinned-package" for f in findings))
+
     def test_uvx_from_flag_scans_source_package(self) -> None:
         for command in (
             "uvx --from some-package tool",
