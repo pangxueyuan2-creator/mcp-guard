@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from mcp_guard.policy import Policy, load_policy
 
@@ -62,6 +62,7 @@ NPM_EXACT_VERSION_PATTERN = re.compile(
     r"^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
 GIT_COMMIT_SHA_PATTERN = re.compile(r"^(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{64})$")
+URL_DIGEST_LENGTHS = {"sha256": 64, "sha384": 96, "sha512": 128}
 SENSITIVE_NAME_PATTERN = re.compile(
     r"(?i)(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|"
     r"bearer[_-]?token|client[_-]?secret|refresh[_-]?token|session[_-]?token|"
@@ -390,7 +391,9 @@ def _host_allowed(host: str, allowed_hosts: set[str]) -> bool:
 def _looks_unpinned(spec: str) -> bool:
     if spec.startswith("git+"):
         return _git_vcs_ref_is_unpinned(spec)
-    if spec.startswith((".", "/", "-", "http://", "https://")):
+    if spec.startswith(("http://", "https://")):
+        return _remote_url_is_unpinned(spec)
+    if spec.startswith((".", "/", "-")):
         return False
     if "===" in spec:
         return False
@@ -430,6 +433,20 @@ def _git_vcs_ref_is_unpinned(spec: str) -> bool:
 
     ref = target[ref_separator + 1 :]
     return GIT_COMMIT_SHA_PATTERN.fullmatch(ref) is None
+
+
+def _remote_url_is_unpinned(spec: str) -> bool:
+    """Return whether a remote archive URL lacks a verifiable content digest."""
+    fragment = urlparse(spec).fragment
+    for name, value in parse_qsl(fragment, keep_blank_values=True):
+        expected_length = URL_DIGEST_LENGTHS.get(name.lower())
+        if (
+            expected_length is not None
+            and len(value) == expected_length
+            and re.fullmatch(r"[0-9A-Fa-f]+", value) is not None
+        ):
+            return False
+    return True
 
 
 def _looks_like_placeholder(value: str) -> bool:
