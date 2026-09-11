@@ -20,17 +20,29 @@ PACKAGE_COMMAND_PATTERN = re.compile(
     rf"(?im)\b(?:npx(?:\s+(?:-y|--yes))?|npm\s+(?:install|i)|"
     rf"pip(?:3)?\s+install|{PYTHON_PIP_PREFIX}\s+install|uvx)\s+([^\s\\]+)"
 )
+PIP_VALUE_INSTALL_FLAG = (
+    r"(?:-i|--index-url|--extra-index-url|-f|--find-links|--trusted-host|"
+    r"--proxy|--cert|--client-cert|--timeout|--retries|--cache-dir|--src|"
+    r"-t|--target|--root|--prefix|--platform|--python-version|"
+    r"--implementation|--abi|-C|--config-settings)\s+[^\s\\]+"
+)
 PIP_LEADING_INSTALL_FLAG = (
-    r"(?:-U|--upgrade|--pre|--user|--no-deps|--ignore-installed|"
-    r"--force-reinstall|--no-build-isolation|--[A-Za-z0-9_-]+=[^\s]+)"
+    rf"(?:{PIP_VALUE_INSTALL_FLAG}|-U|--upgrade|--pre|--user|--no-deps|"
+    r"--ignore-installed|--force-reinstall|--no-build-isolation|"
+    r"--[A-Za-z0-9_-]+=[^\s]+)"
 )
 PIP_OPTION_PACKAGE_PATTERN = re.compile(
     rf"(?im)\b(?:pip(?:3)?|{PYTHON_PIP_PREFIX})\s+install\s+"
     rf"(?:{PIP_LEADING_INSTALL_FLAG}\s+)+([^\s\\]+)"
 )
+NPM_VALUE_INSTALL_FLAG = (
+    r"(?:--registry|--prefix|--cache|--userconfig|--workspace|-w|--tag|"
+    r"--omit|--include|--install-strategy|--save-prefix|--loglevel)\s+[^\s\\]+"
+)
 NPM_LEADING_INSTALL_FLAG = (
-    r"(?:-D|-O|-P|-S|-g|--save-dev|--save-optional|--save-peer|--save-prod|"
-    r"--save|--no-save|--global|--dry-run|--[A-Za-z0-9_-]+=[^\s]+)"
+    rf"(?:{NPM_VALUE_INSTALL_FLAG}|-D|-O|-P|-S|-g|--save-dev|--save-optional|"
+    r"--save-peer|--save-prod|--save|--no-save|--global|--dry-run|"
+    r"--[A-Za-z0-9_-]+=[^\s]+)"
 )
 NPM_OPTION_PACKAGE_PATTERN = re.compile(
     rf"(?im)\bnpm\s+(?:install|i)\s+"
