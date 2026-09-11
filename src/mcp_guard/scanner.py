@@ -20,6 +20,22 @@ PACKAGE_COMMAND_PATTERN = re.compile(
     rf"(?im)\b(?:npx(?:\s+(?:-y|--yes))?|npm\s+(?:install|i)|"
     rf"pip(?:3)?\s+install|{PYTHON_PIP_PREFIX}\s+install|uvx)\s+([^\s\\]+)"
 )
+PIP_LEADING_INSTALL_FLAG = (
+    r"(?:-U|--upgrade|--pre|--user|--no-deps|--ignore-installed|"
+    r"--force-reinstall|--no-build-isolation|--[A-Za-z0-9_-]+=[^\s]+)"
+)
+PIP_OPTION_PACKAGE_PATTERN = re.compile(
+    rf"(?im)\b(?:pip(?:3)?|{PYTHON_PIP_PREFIX})\s+install\s+"
+    rf"(?:{PIP_LEADING_INSTALL_FLAG}\s+)+([^\s\\]+)"
+)
+NPM_LEADING_INSTALL_FLAG = (
+    r"(?:-D|-O|-P|-S|-g|--save-dev|--save-optional|--save-peer|--save-prod|"
+    r"--save|--no-save|--global|--dry-run|--[A-Za-z0-9_-]+=[^\s]+)"
+)
+NPM_OPTION_PACKAGE_PATTERN = re.compile(
+    rf"(?im)\bnpm\s+(?:install|i)\s+"
+    rf"(?:{NPM_LEADING_INSTALL_FLAG}\s+)+([^\s\\]+)"
+)
 INSTALL_COMMAND_PATTERN = re.compile(
     rf"(?im)\b(?:npm\s+(?:install|i)|pip(?:3)?\s+install|"
     rf"{PYTHON_PIP_PREFIX}\s+install)\s+([^\r\n;&|]+)"
@@ -161,7 +177,10 @@ def _scan_tool_names(text: str, path: Path, policy: Policy) -> list[dict[str, An
     lower = text.lower()
     for tool in sorted(policy.effective_forbidden_tools):
         escaped = re.escape(tool.lower())
-        pattern = re.compile(rf"[\"']{escaped}[\"']|\bname\s*[\"']?\s*:\s*[\"']{escaped}[\"']", re.IGNORECASE)
+        pattern = re.compile(
+            rf"[\"']{escaped}[\"']|\bname\s*[\"']?\s*:\s*[\"']{escaped}[\"']",
+            re.IGNORECASE,
+        )
         for match in pattern.finditer(lower):
             findings.append(
                 _finding(
@@ -198,7 +217,12 @@ def _scan_urls(text: str, path: Path, policy: Policy) -> list[dict[str, Any]]:
 
 def _scan_supply_chain(text: str, path: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
-    for pattern in (PACKAGE_COMMAND_PATTERN, UVX_FROM_PATTERN):
+    for pattern in (
+        PACKAGE_COMMAND_PATTERN,
+        PIP_OPTION_PACKAGE_PATTERN,
+        NPM_OPTION_PACKAGE_PATTERN,
+        UVX_FROM_PATTERN,
+    ):
         for match in pattern.finditer(text):
             spec = match.group(1).strip("\"',[]()")
             if spec and _looks_unpinned(spec):
@@ -262,7 +286,9 @@ def _scan_absolute_paths(text: str, path: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for match in ABSOLUTE_PATH_PATTERN.finditer(text):
         candidate = match.group(1)
-        if candidate.startswith(("/usr/", "/opt/", "/etc/", "/var/", "/home/", "/root/")) or re.match(r"^[A-Z]:\\", candidate, re.IGNORECASE):
+        if candidate.startswith(
+            ("/usr/", "/opt/", "/etc/", "/var/", "/home/", "/root/")
+        ) or re.match(r"^[A-Z]:\\", candidate, re.IGNORECASE):
             findings.append(
                 _finding(
                     "warning",
@@ -293,7 +319,12 @@ def _walk_json(
             child_pointer = f"{pointer}.{key}"
             key_lower = str(key).lower()
 
-            if key_lower in {"tools", "capabilities", "functions", "allowed_tools"} and isinstance(child, list):
+            if key_lower in {
+                "tools",
+                "capabilities",
+                "functions",
+                "allowed_tools",
+            } and isinstance(child, list):
                 for item in child:
                     name: str | None = None
                     if isinstance(item, str):
@@ -312,7 +343,11 @@ def _walk_json(
                             )
                         )
 
-            if SENSITIVE_NAME_PATTERN.search(key_lower) and isinstance(child, str) and child.strip():
+            if (
+                SENSITIVE_NAME_PATTERN.search(key_lower)
+                and isinstance(child, str)
+                and child.strip()
+            ):
                 if not _looks_like_placeholder(child):
                     findings.append(
                         _finding(
@@ -368,7 +403,14 @@ def _looks_like_placeholder(value: str) -> bool:
     upper = stripped.upper()
     return (
         stripped.startswith(("${", "{{", "$", "<"))
-        or upper in {"REDACTED", "CHANGEME", "PLACEHOLDER", "YOUR_TOKEN", "YOUR_API_KEY"}
+        or upper
+        in {
+            "REDACTED",
+            "CHANGEME",
+            "PLACEHOLDER",
+            "YOUR_TOKEN",
+            "YOUR_API_KEY",
+        }
     )
 
 
