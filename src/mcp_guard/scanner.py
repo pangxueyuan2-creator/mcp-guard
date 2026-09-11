@@ -390,7 +390,12 @@ def _host_allowed(host: str, allowed_hosts: set[str]) -> bool:
 def _looks_unpinned(spec: str) -> bool:
     if spec.startswith("git+"):
         return _git_vcs_ref_is_unpinned(spec)
-    if spec.startswith((".", "/", "-", "http://", "https://")):
+    if spec.startswith(("http://", "https://")):
+        # A URL can keep serving different bytes over time. Without installer-
+        # specific integrity metadata in the command, the scanner cannot prove
+        # the artifact is immutable, so fail closed rather than trusting the path.
+        return True
+    if spec.startswith((".", "/", "-")):
         return False
     if "===" in spec:
         return False
