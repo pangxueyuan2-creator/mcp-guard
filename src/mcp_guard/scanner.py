@@ -12,12 +12,17 @@ from urllib.parse import urlparse
 from mcp_guard.policy import Policy, load_policy
 
 URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+PYTHON_PIP_PREFIX = (
+    r"(?:python(?:3(?:\.\d+)?)?(?:\.exe)?|py(?:\.exe)?(?:\s+-\d+(?:\.\d+)?)?)"
+    r"\s+-m\s+pip"
+)
 PACKAGE_COMMAND_PATTERN = re.compile(
-    r"(?im)\b(?:npx(?:\s+(?:-y|--yes))?|npm\s+(?:install|i)|"
-    r"pip(?:3)?\s+install|uvx)\s+([^\s\\]+)"
+    rf"(?im)\b(?:npx(?:\s+(?:-y|--yes))?|npm\s+(?:install|i)|"
+    rf"pip(?:3)?\s+install|{PYTHON_PIP_PREFIX}\s+install|uvx)\s+([^\s\\]+)"
 )
 INSTALL_COMMAND_PATTERN = re.compile(
-    r"(?im)\b(?:npm\s+(?:install|i)|pip(?:3)?\s+install)\s+([^\r\n;&|]+)"
+    rf"(?im)\b(?:npm\s+(?:install|i)|pip(?:3)?\s+install|"
+    rf"{PYTHON_PIP_PREFIX}\s+install)\s+([^\r\n;&|]+)"
 )
 EXPLICIT_PACKAGE_SPEC_PATTERN = re.compile(r"(?:@|===?|~=|!=|<=|>=|<|>)")
 UVX_FROM_PATTERN = re.compile(r"(?im)\buvx\s+--from(?:=|\s+)([^\s\\]+)")
