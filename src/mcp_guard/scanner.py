@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tomllib
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
@@ -158,13 +159,20 @@ def _scan_file(path: Path, policy: Policy) -> list[dict[str, Any]]:
     findings.extend(_scan_supply_chain(text, path))
     findings.extend(_scan_absolute_paths(text, path))
 
-    if path.suffix.lower() == ".json":
+    suffix = path.suffix.lower()
+    data: Any | None = None
+    if suffix == ".json":
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            data = None
-        if data is not None:
-            findings.extend(_scan_json(data, path, policy))
+            pass
+    elif suffix == ".toml":
+        try:
+            data = tomllib.loads(text)
+        except tomllib.TOMLDecodeError:
+            pass
+    if data is not None:
+        findings.extend(_scan_json(data, path, policy))
 
     return findings
 
