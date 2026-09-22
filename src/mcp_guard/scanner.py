@@ -222,7 +222,13 @@ def _scan_file(path: Path, policy: Policy) -> list[dict[str, Any]]:
             )
 
     if not structured_complete:
-        findings.extend(_scan_supply_chain(text, path))
+        text_findings = _scan_supply_chain(text, path)
+        if suffix in {".json", ".toml"}:
+            # Incomplete parsing must not expose argv that structured launch
+            # findings would redact. Keep the rule and source location.
+            for finding in text_findings:
+                finding["message"] = "Package/install command appears unpinned; review the configuration."
+        findings.extend(text_findings)
 
     return findings
 

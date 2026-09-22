@@ -132,6 +132,53 @@ class ConfigParseDiagnosticTests(unittest.TestCase):
                     target.write_text(text, encoding="utf-8")
                     self.assertEqual(scan_path(target), [])
 
+    def test_launch_credentials_stay_redacted_when_structured_checks_fail(self) -> None:
+        marker = "SYNTHETIC_CREDENTIAL_CANARY"
+        package = f"--package=https://user:{marker}@example.invalid/tool.tgz?token={marker}"
+        launch = {"command": "npx", "args": [package, "serve"]}
+        valid_json = json.dumps({"mcpServers": {"demo": launch}})
+        valid_toml = f'mcp_servers.demo = {{ command = "npx", args = ["{package}", "serve"] }}\n'
+        depth = sys.getrecursionlimit() + 100
+        array = "[" * depth + "0" + "]" * depth
+        samples = (
+            ("valid.json", valid_json, None),
+            ("valid.toml", valid_toml, None),
+            ("broken.json", valid_json[:-1], "config-parse-error"),
+            ("broken.toml", valid_toml * 2, "config-parse-error"),
+            ("deep.json", valid_json[:-1] + ', "deep": ' + array + "}", "config-scan-incomplete"),
+            ("deep.toml", valid_toml + "deep = " + array + "\n", "config-scan-incomplete"),
+            ("deep-walk.toml", valid_toml + ".".join(["a"] * 999) + " = 1\n", "config-scan-incomplete"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, text, diagnostic in samples:
+                target = Path(tmp) / name
+                target.write_text(text, encoding="utf-8")
+                findings = scan_path(target)
+                expected_rules = {"unpinned-package"} | ({diagnostic} if diagnostic else set())
+                with self.subTest(name=name, surface="findings"):
+                    self.assertEqual({finding["rule"] for finding in findings}, expected_rules)
+                    self.assertNotIn(marker, json.dumps(findings))
+                    packages = [finding for finding in findings if finding["rule"] == "unpinned-package"]
+                    self.assertTrue(packages)
+                    for finding in packages:
+                        if diagnostic:
+                            self.assertEqual(finding["location"], str(target))
+                            self.assertIsInstance(finding["line"], int)
+                        else:
+                            self.assertTrue(finding["location"].endswith(".demo.args[0]"))
+                            self.assertNotIn("line", finding)
+                for report_format in ("human", "json", "sarif"):
+                    with self.subTest(name=name, format=report_format):
+                        stdout = io.StringIO()
+                        stderr = io.StringIO()
+                        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                            code = main(["scan", str(target), "--strict", "--format", report_format])
+                        self.assertEqual(code, 1)
+                        self.assertEqual(stderr.getvalue(), "")
+                        self.assertNotIn(marker, stdout.getvalue())
+                        for rule in expected_rules:
+                            self.assertIn(rule, stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
