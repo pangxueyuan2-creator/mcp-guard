@@ -43,7 +43,11 @@ class SpecialFileTests(unittest.TestCase):
         metadata = os.stat_result(fields)
 
         def inspect(path: Path, *args, **kwargs):
-            return metadata if path == self.target else original_stat(path, *args, **kwargs)
+            # Python 3.12 lstat delegates to stat(follow_symlinks=False).
+            # Preserve real traversal metadata; inject only the content stat.
+            if path == self.target and kwargs.get("follow_symlinks", True):
+                return metadata
+            return original_stat(path, *args, **kwargs)
 
         return mock.patch.object(Path, "stat", inspect)
 
@@ -51,6 +55,7 @@ class SpecialFileTests(unittest.TestCase):
         # This is metadata injection, not an assertion that Windows has POSIX FIFOs.
         for mode in (stat.S_IFIFO, stat.S_IFSOCK, stat.S_IFCHR, stat.S_IFBLK):
             with self.subTest(mode=mode), self.special_metadata(mode):
+                self.assertTrue(stat.S_ISREG(self.target.lstat().st_mode))
                 with mock.patch.object(Path, "read_text", side_effect=AssertionError("Special file read attempted")) as reader:
                     findings = scan_path(self.root)
                 reader.assert_not_called()
