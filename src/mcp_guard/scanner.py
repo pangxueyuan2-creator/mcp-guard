@@ -9,12 +9,13 @@ import stat
 import tomllib
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from mcp_guard.launch import package_arguments
 from mcp_guard.policy import Policy, load_policy
 
 URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+DISPLAY_URL_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
 PYTHON_PIP_PREFIX = (
     r"(?:python(?:3(?:\.\d+)?)?(?:\.exe)?|py(?:\.exe)?(?:\s+-\d+(?:\.\d+)?)?)"
     r"\s+-m\s+pip"
@@ -292,6 +293,25 @@ def _scan_urls(text: str, path: Path, policy: Policy) -> list[dict[str, Any]]:
     return findings
 
 
+def _redact_url_credentials(value: str) -> str:
+    """Keep diagnostic locations useful without echoing URL authentication data."""
+    def redact(match: re.Match[str]) -> str:
+        try:
+            parts = urlsplit(match.group(0))
+        except ValueError:
+            return "[redacted URL]"
+        if "@" not in parts.netloc and not parts.query and not parts.fragment:
+            return match.group(0)
+        # Any query or fragment may carry credentials, regardless of key name.
+        # Generic schemes also cover the existing git+https/git+ssh package specs.
+        return urlunsplit((
+            parts.scheme, parts.netloc.rsplit("@", 1)[-1], parts.path,
+            "[redacted]" if parts.query else "", "[redacted]" if parts.fragment else "",
+        ))
+
+    return DISPLAY_URL_PATTERN.sub(redact, value)
+
+
 def _scan_supply_chain(text: str, path: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for pattern in (
@@ -307,7 +327,7 @@ def _scan_supply_chain(text: str, path: Path) -> list[dict[str, Any]]:
                     _finding(
                         "warning",
                         "unpinned-package",
-                        f"Package/install command appears unpinned: {spec}",
+                        f"Package/install command appears unpinned: {_redact_url_credentials(spec)}",
                         path,
                         line=_line_number(text, match.start()),
                     )
@@ -331,7 +351,7 @@ def _scan_supply_chain(text: str, path: Path) -> list[dict[str, Any]]:
                     _finding(
                         "warning",
                         "unpinned-package",
-                        f"Package/install command appears unpinned: {spec}",
+                        f"Package/install command appears unpinned: {_redact_url_credentials(spec)}",
                         path,
                         line=_line_number(text, command_match.start()),
                     )
@@ -349,7 +369,7 @@ def _scan_supply_chain(text: str, path: Path) -> list[dict[str, Any]]:
                     _finding(
                         "warning",
                         "unpinned-package",
-                        f"Package/install command appears unpinned: {spec}",
+                        f"Package/install command appears unpinned: {_redact_url_credentials(spec)}",
                         path,
                         line=_line_number(
                             text, command_match.start() + package_match.start()
@@ -370,7 +390,7 @@ def _scan_absolute_paths(text: str, path: Path) -> list[dict[str, Any]]:
                 _finding(
                     "warning",
                     "absolute-path-reference",
-                    f"Absolute filesystem path may escape an intended workspace scope: {candidate}",
+                    f"Absolute filesystem path may escape an intended workspace scope: {_redact_url_credentials(candidate)}",
                     path,
                     line=_line_number(text, match.start(1)),
                 )
