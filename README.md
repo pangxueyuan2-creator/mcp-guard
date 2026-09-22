@@ -64,6 +64,12 @@ python -m mcp_guard scan examples/risky-mcp-server.json
 
 MCP Guard deliberately reports heuristics rather than claiming that every finding is exploitable. Treat findings as review signals.
 
+During directory scans, entries with supported extensions must be regular files
+before their contents are read. FIFOs, sockets, and device files produce an
+`unsupported-file-type` warning instead of being opened; `--strict` makes that
+warning fail the scan. This metadata check does not prevent concurrent filesystem
+replacement and is not a race-free sandbox.
+
 ## Output formats
 
 Human-readable output is the default:
