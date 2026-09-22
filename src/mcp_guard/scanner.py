@@ -160,20 +160,40 @@ def _scan_file(path: Path, policy: Policy) -> list[dict[str, Any]]:
     findings.extend(_scan_absolute_paths(text, path))
 
     suffix = path.suffix.lower()
-    data: Any | None = None
-    if suffix == ".json":
+    structured_complete = False
+    if suffix in {".json", ".toml"}:
         try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            pass
-    elif suffix == ".toml":
-        try:
-            data = tomllib.loads(text)
-        except tomllib.TOMLDecodeError:
-            pass
-    if data is not None:
-        findings.extend(_scan_json(data, path, policy))
-    else:
+            data = json.loads(text) if suffix == ".json" else tomllib.loads(text)
+            if data is not None:
+                findings.extend(_scan_json(data, path, policy))
+            structured_complete = True
+        except (json.JSONDecodeError, tomllib.TOMLDecodeError):
+            # Decoder messages may include configuration keys or values.
+            # Report only the format and incomplete coverage, never the input.
+            findings.append(
+                _finding(
+                    "warning",
+                    "config-parse-error",
+                    f"Could not parse {suffix[1:].upper()} configuration; "
+                    "structured checks are incomplete. Text checks still ran.",
+                    path,
+                )
+            )
+        except RecursionError:
+            # Both decoding and the structural walk can exceed Python's
+            # nesting limit; preserve the text findings already collected.
+            findings.append(
+                _finding(
+                    "warning",
+                    "config-scan-incomplete",
+                    f"Structured checks of {suffix[1:].upper()} configuration "
+                    "are incomplete because its nesting exceeds supported limits. "
+                    "Text checks still ran.",
+                    path,
+                )
+            )
+
+    if not structured_complete:
         findings.extend(_scan_supply_chain(text, path))
 
     return findings
