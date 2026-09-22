@@ -57,12 +57,19 @@ python -m mcp_guard scan examples/risky-mcp-server.json
 | Secrets | OpenAI-style keys, GitHub tokens, Slack tokens, AWS access key IDs, private keys |
 | Sensitive config | Literal values in fields such as `api_key`, `access_token`, `password`, `private_key` |
 | Network scope | URLs outside an optional `allowed_hosts` policy |
-| Supply chain | Unpinned `npx`, `npm install`, `pip install`, and `uvx` package specs |
+| Supply chain | Unpinned `npx`, `npm install`, `pip install`, and `uvx` package specs, including JSON/TOML MCP launch arguments |
 | Filesystem scope | Absolute Linux/Windows paths that may escape a workspace |
 | Traversal safety | Symlinks skipped; common dependency/build directories pruned |
 | Resource bounds | Configurable maximum file size |
 
 MCP Guard deliberately reports heuristics rather than claiming that every finding is exploitable. Treat findings as review signals.
+
+MCP launch configurations are inspected as `command` plus an `args` array, preserving
+argument boundaries. Supported containers are `mcpServers`, `mcp_servers`, `servers`,
+and `mcp.servers`. Unknown installer options, malformed launch arguments, external
+requirements files, and shell wrappers produce `unresolved-mcp-command` warnings.
+Use `--strict` to fail on these review findings. See [structured launch checks](docs/structured-launches.md)
+for supported forms and limits.
 
 ## Output formats
 
