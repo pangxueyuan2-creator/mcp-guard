@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import tomllib
 from pathlib import Path
 from typing import Any, Iterable
@@ -120,7 +121,7 @@ def _scan_file(path: Path, policy: Policy) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
 
     try:
-        size = path.stat().st_size
+        metadata = path.stat()
     except OSError as exc:
         return [
             _finding(
@@ -131,6 +132,17 @@ def _scan_file(path: Path, policy: Policy) -> list[dict[str, Any]]:
             )
         ]
 
+    if not stat.S_ISREG(metadata.st_mode):
+        return [
+            _finding(
+                "warning",
+                "unsupported-file-type",
+                "Skipped non-regular file; only regular file contents are scanned.",
+                path,
+            )
+        ]
+
+    size = metadata.st_size
     if size > policy.max_file_bytes:
         return [
             _finding(
