@@ -99,9 +99,9 @@ def load_policy(path: Path | None) -> Policy:
     except OSError as exc:
         raise ValueError(f"Could not read policy {path}: {exc}") from exc
 
-    policy_section = data.get("policy", {})
-    scope_section = data.get("scope", {})
-    secrets_section = data.get("secrets", {})
+    policy_section = _table(data, "policy")
+    scope_section = _table(data, "scope")
+    secrets_section = _table(data, "secrets")
 
     if "forbidden_tools" in policy_section:
         policy.forbidden_tools = _string_set(policy_section["forbidden_tools"], "policy.forbidden_tools")
@@ -113,9 +113,9 @@ def load_policy(path: Path | None) -> Policy:
             raise ValueError("policy.max_severity must be one of: info, warning, error")
         policy.max_severity = severity
     if "max_file_bytes" in policy_section:
-        value = int(policy_section["max_file_bytes"])
-        if value < 1:
-            raise ValueError("policy.max_file_bytes must be positive")
+        value = policy_section["max_file_bytes"]
+        if type(value) is not int or value < 1:
+            raise ValueError("policy.max_file_bytes must be a positive integer")
         policy.max_file_bytes = value
 
     if "allowed_hosts" in scope_section:
@@ -144,6 +144,13 @@ def load_policy(path: Path | None) -> Policy:
             raise ValueError(f"Invalid regular expression in secrets.patterns: {exc}") from exc
 
     return policy
+
+
+def _table(data: dict[str, object], name: str) -> dict[str, object]:
+    value = data.get(name, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a TOML table")
+    return value
 
 
 def _string_set(value: object, field_name: str) -> set[str]:

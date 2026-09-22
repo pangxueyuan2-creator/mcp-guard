@@ -53,12 +53,17 @@ def build_sarif_report(findings: list[dict[str, Any]]) -> dict[str, Any]:
         if isinstance(line, int) and line > 0:
             physical_location["region"] = {"startLine": line}
 
+        result_location: dict[str, Any] = {"physicalLocation": physical_location}
+        if ":$" in location:
+            result_location["logicalLocations"] = [
+                {"fullyQualifiedName": "$" + location.split(":$", 1)[1]}
+            ]
         results.append(
             {
                 "ruleId": rule_id,
                 "level": SARIF_LEVELS.get(severity, "note"),
                 "message": {"text": message},
-                "locations": [{"physicalLocation": physical_location}],
+                "locations": [result_location],
             }
         )
 

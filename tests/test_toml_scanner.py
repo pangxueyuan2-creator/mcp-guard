@@ -63,6 +63,7 @@ class TomlScannerTests(unittest.TestCase):
             findings = scan_path(target)
 
         self.assertFalse(any(f["rule"] == "sensitive-value" for f in findings))
+        self.assertTrue(any(f["rule"] == "config-parse-error" for f in findings))
 
 
 if __name__ == "__main__":
