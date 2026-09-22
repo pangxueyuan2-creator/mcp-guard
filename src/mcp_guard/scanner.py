@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from mcp_guard.launch import package_arguments
 from mcp_guard.policy import Policy, load_policy
 
 URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
@@ -156,7 +157,6 @@ def _scan_file(path: Path, policy: Policy) -> list[dict[str, Any]]:
     findings.extend(_scan_secrets(text, path, policy))
     findings.extend(_scan_tool_names(text, path, policy))
     findings.extend(_scan_urls(text, path, policy))
-    findings.extend(_scan_supply_chain(text, path))
     findings.extend(_scan_absolute_paths(text, path))
 
     suffix = path.suffix.lower()
@@ -173,6 +173,8 @@ def _scan_file(path: Path, policy: Policy) -> list[dict[str, Any]]:
             pass
     if data is not None:
         findings.extend(_scan_json(data, path, policy))
+    else:
+        findings.extend(_scan_supply_chain(text, path))
 
     return findings
 
@@ -324,8 +326,95 @@ def _scan_absolute_paths(text: str, path: Path) -> list[dict[str, Any]]:
 
 def _scan_json(data: Any, path: Path, policy: Policy) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
-    _walk_json(data, path, policy, findings, pointer="$")
+    launches = _mcp_launches(data)
+    for value, pointer in launches:
+        findings.extend(_scan_launch(value, path, pointer))
+    _walk_json(
+        data, path, policy, findings, pointer="$",
+        launch_ids={id(value) for value, _ in launches},
+    )
     return findings
+
+
+def _mcp_launches(data: Any) -> list[tuple[Any, str]]:
+    if not isinstance(data, dict):
+        return []
+    containers = [(data[key], f"$.{key}") for key in ("mcpServers", "mcp_servers") if key in data]
+    if isinstance(data.get("mcp"), dict) and "servers" in data["mcp"]:
+        containers.append((data["mcp"]["servers"], "$.mcp.servers"))
+    launches: list[tuple[Any, str]] = []
+    # "servers" alone is also used by unrelated application configurations.
+    # Only entries with a local-launch shape opt into this ambiguous container.
+    if isinstance(data.get("servers"), dict):
+        launches.extend(
+            (value, f"$.servers.{key}")
+            for key, value in data["servers"].items()
+            if isinstance(value, dict) and ("command" in value or "args" in value)
+        )
+    for container, pointer in containers:
+        if isinstance(container, dict):
+            launches.extend((value, f"{pointer}.{key}") for key, value in container.items())
+        else:
+            launches.append((container, pointer))
+    return launches
+
+
+def _scan_launch(value: Any, path: Path, pointer: str) -> list[dict[str, Any]]:
+    def unresolved(suffix: str) -> dict[str, Any]:
+        return _finding(
+            "warning", "unresolved-mcp-command",
+            "MCP launch package arguments could not be fully checked; review the configuration.",
+            f"{path}:{pointer}{suffix}",
+        )
+
+    if not isinstance(value, dict):
+        return [unresolved("")]
+    if "command" not in value:
+        # Remote HTTP/SSE servers have no local package-launch command.
+        return [] if isinstance(value.get("url"), str) else [unresolved(".command")]
+    command = value["command"]
+    if not isinstance(command, str) or not command.strip():
+        return [unresolved(".command")]
+    args = value.get("args", [])
+    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+        return [unresolved(".args")]
+    parsed = package_arguments(command, args)
+    findings = [unresolved(".args" if index is None else f".args[{index}]") for index in parsed.unresolved]
+    for index, spec in parsed.packages:
+        if _launch_spec_unpinned(spec, parsed.ecosystem):
+            findings.append(_finding(
+                "warning", "unpinned-package",
+                "MCP launch package argument is not pinned to an exact version or full Git commit.",
+                f"{path}:{pointer}.args[{index}]",
+            ))
+    return findings
+
+
+def _launch_spec_unpinned(spec: str, ecosystem: str | None) -> bool:
+    spec = spec.strip()
+    if spec.startswith((".", "/")) or re.match(r"^[A-Za-z]:[\\/]", spec):
+        return False
+    if ecosystem == "python":
+        # PEP 508 direct references are one argv token, including their spaces.
+        direct = re.fullmatch(r"[A-Za-z0-9_.-]+(?:\[[^\]]+\])?\s*@\s*((?:git\+|https?://).+)", spec)
+        if direct:
+            spec = direct.group(1).split(" ;", 1)[0].strip()
+        if spec.startswith("git+"):
+            return _git_vcs_ref_is_unpinned(spec)
+        if spec.startswith(("http://", "https://")):
+            return True
+        requirement = spec.split(";", 1)[0].strip()
+        exact = re.fullmatch(r"[A-Za-z0-9_.-]+(?:\[[^\]]+\])?(===?)([^,\s]+)", requirement)
+        if exact:
+            version = exact.group(2)
+            return any(character in version for character in "*$<>{}=")
+        # uvx also accepts the runner shorthand package@version.
+        return not ("@" in spec and NPM_EXACT_VERSION_PATTERN.fullmatch(spec.rsplit("@", 1)[1]))
+    if spec.startswith("git+"):
+        return "#" not in spec or GIT_COMMIT_SHA_PATTERN.fullmatch(spec.rsplit("#", 1)[1]) is None
+    if spec.startswith(("http://", "https://")):
+        return True
+    return not ("@" in spec and NPM_EXACT_VERSION_PATTERN.fullmatch(spec.rsplit("@", 1)[1]))
 
 
 def _walk_json(
@@ -334,6 +423,8 @@ def _walk_json(
     policy: Policy,
     findings: list[dict[str, Any]],
     pointer: str,
+    launch_ids: set[int],
+    scan_commands: bool = True,
 ) -> None:
     if isinstance(value, dict):
         for key, child in value.items():
@@ -379,12 +470,22 @@ def _walk_json(
                         )
                     )
 
-            _walk_json(child, path, policy, findings, child_pointer)
+            _walk_json(
+                child, path, policy, findings, child_pointer, launch_ids,
+                scan_commands and not (id(value) in launch_ids and key in {"command", "args"}),
+            )
         return
 
     if isinstance(value, list):
         for index, child in enumerate(value):
-            _walk_json(child, path, policy, findings, f"{pointer}[{index}]")
+            _walk_json(child, path, policy, findings, f"{pointer}[{index}]", launch_ids, scan_commands)
+    elif isinstance(value, str) and scan_commands:
+        # Inspect ordinary text fields, but never reconstruct launch argv as a
+        # command line. A line within a decoded string is not a source-file line.
+        for finding in _scan_supply_chain(value, path):
+            finding["location"] = f"{path}:{pointer}"
+            finding.pop("line", None)
+            findings.append(finding)
 
 
 def _host_allowed(host: str, allowed_hosts: set[str]) -> bool:
