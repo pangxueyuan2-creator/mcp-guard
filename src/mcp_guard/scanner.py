@@ -221,9 +221,35 @@ def _scan_urls(text: str, path: Path, policy: Policy) -> list[dict[str, Any]]:
 
     findings: list[dict[str, Any]] = []
     for match in URL_PATTERN.finditer(text):
-        raw_url = match.group(0).rstrip(".,);]}")
-        host = (urlparse(raw_url).hostname or "").lower()
-        if host and not _host_allowed(host, policy.allowed_hosts):
+        raw_url = match.group(0)
+        # Remove prose brackets without stripping a valid IPv6 host's closing bracket.
+        surplus_brackets = raw_url.count("]") - raw_url.count("[")
+        end = len(raw_url)
+        while end:
+            trailing = raw_url[end - 1]
+            if trailing == "]" and surplus_brackets > 0:
+                surplus_brackets -= 1
+            elif trailing not in ".,);}":
+                break
+            end -= 1
+        raw_url = raw_url[:end]
+        try:
+            host = (urlparse(raw_url).hostname or "").lower()
+        except ValueError:
+            # Parser errors can include the full authority, including credentials.
+            host = ""
+        if not host:
+            findings.append(
+                _finding(
+                    "warning",
+                    "url-parse-error",
+                    "Could not parse URL; its network host was not checked against policy.",
+                    path,
+                    line=_line_number(text, match.start()),
+                )
+            )
+            continue
+        if not _host_allowed(host, policy.allowed_hosts):
             findings.append(
                 _finding(
                     "warning",
