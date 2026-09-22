@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import tomllib
 from pathlib import Path
 from typing import Any, Iterable
@@ -85,7 +86,7 @@ def scan_path(path: Path, policy_path: Path | None = None) -> list[dict[str, Any
     if path.is_file():
         findings.extend(_scan_file(path, policy))
     elif path.is_dir():
-        for candidate in _iter_scannable_files(path, policy):
+        for candidate in _iter_scannable_files(path, policy, findings):
             findings.extend(_scan_file(candidate, policy))
     else:
         findings.append(
@@ -100,20 +101,47 @@ def scan_path(path: Path, policy_path: Path | None = None) -> list[dict[str, Any
     return _deduplicate(findings)
 
 
-def _iter_scannable_files(root: Path, policy: Policy) -> Iterable[Path]:
-    """Yield supported files while pruning dependency/build directories."""
-    for current_root, dirs, files in os.walk(root, followlinks=False):
+def _iter_scannable_files(
+    root: Path, policy: Policy, findings: list[dict[str, Any]] | None = None
+) -> Iterable[Path]:
+    """Prune nested aliases and exclusions; the explicitly selected root is trusted."""
+    reported = findings if findings is not None else []
+
+    def inspect_entry(candidate: Path) -> bool:
+        try:
+            metadata = candidate.lstat()
+        except OSError as exc:
+            reported.append(_finding(
+                "warning", "stat-error", f"Could not inspect traversal entry metadata: {exc}", candidate
+            ))
+            return False
+        # Windows junctions need not satisfy is_symlink(). Inspect the reparse
+        # attribute without following them, including on Python 3.11, where
+        # pathlib has no is_junction(). Other reparse points are conservative skips.
+        reparse = getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if stat.S_ISLNK(metadata.st_mode) or reparse:
+            reported.append(_finding(
+                "warning", "skipped-link",
+                "Skipped symbolic link or Windows reparse point during directory traversal.", candidate
+            ))
+            return False
+        return True
+
+    def walk_error(exc: OSError) -> None:
+        reported.append(_finding(
+            "warning", "walk-error", f"Could not enumerate directory: {exc}", exc.filename or root
+        ))
+
+    for current_root, dirs, files in os.walk(root, topdown=True, onerror=walk_error, followlinks=False):
         dirs[:] = [
             name
             for name in dirs
             if name not in policy.excluded_dirs
-            and not Path(current_root, name).is_symlink()
+            and inspect_entry(Path(current_root, name))
         ]
         for name in files:
             candidate = Path(current_root, name)
-            if candidate.is_symlink():
-                continue
-            if candidate.suffix.lower() in policy.scan_extensions:
+            if inspect_entry(candidate) and candidate.suffix.lower() in policy.scan_extensions:
                 yield candidate
 
 

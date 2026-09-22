@@ -59,7 +59,7 @@ python -m mcp_guard scan examples/risky-mcp-server.json
 | Network scope | URLs outside an optional `allowed_hosts` policy |
 | Supply chain | Unpinned `npx`, `npm install`, `pip install`, and `uvx` package specs, including JSON/TOML MCP launch arguments |
 | Filesystem scope | Absolute Linux/Windows paths that may escape a workspace |
-| Traversal safety | Symlinks skipped; common dependency/build directories pruned |
+| Traversal safety | Nested symlinks and Windows reparse points skipped and reported; common dependency/build directories pruned |
 | Resource bounds | Configurable maximum file size |
 
 MCP Guard deliberately reports heuristics rather than claiming that every finding is exploitable. Treat findings as review signals.
@@ -70,6 +70,23 @@ and `mcp.servers`. Unknown installer options, malformed launch arguments, extern
 requirements files, and shell wrappers produce `unresolved-mcp-command` warnings.
 Use `--strict` to fail on these review findings. See [structured launch checks](docs/structured-launches.md)
 for supported forms and limits.
+
+When scanning a directory, MCP Guard does not follow nested symbolic links or
+Windows reparse points, including junctions. This also skips aliases whose targets
+remain inside the directory, avoiding duplicate scans and link cycles. Skipped
+entries produce `skipped-link` warnings; metadata or directory-enumeration failures
+produce `stat-error` or `walk-error` warnings. Excluded directories remain deliberate,
+silent omissions. Use `--strict` when incomplete traversal must fail the CLI.
+
+The path explicitly supplied to `scan` may itself be a file or directory alias;
+selecting that root permits scanning its target. Only aliases encountered below
+it are skipped. The check uses non-following metadata supported on Python 3.11–3.14
+and does not execute filesystem commands. It is not a race-free filesystem sandbox.
+
+Malformed JSON/TOML and structures that exceed the supported nesting depth produce
+`config-parse-error` or `config-scan-incomplete` warnings. Text checks still run, but
+structured coverage is incomplete; `--strict` returns a failure. Diagnostic messages
+do not echo decoder exception fragments or the configuration contents.
 
 ## Output formats
 
