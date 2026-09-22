@@ -129,6 +129,11 @@ extensions = ["json", "toml", "yaml", "yml", "md", "py", "js", "ts"]
 patterns = ["MYCOMPANY_[A-Z0-9]{32}"]
 ```
 
+The `policy`, `scope`, and `secrets` sections must be TOML tables when present.
+`policy.max_file_bytes` must be a positive integer, not a boolean, float, or
+numeric string. Invalid policies return exit code 2 before scanning or writing
+a report; omitted or empty tables retain the defaults.
+
 Use `--strict` when warnings should also fail the command:
 
 ```bash
